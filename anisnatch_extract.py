@@ -32,8 +32,14 @@ AllAnime decoding detail:
       "key":             "ep-{animeKey}_{ep}_dub"
     }
   From the mediaId we build:
-    https://static.wixstatic.com/videos/{mediaId}/mp4/{mediaId},{quality}.mp4
-    https://static.wixstatic.com/videos/{mediaId}/file/{mediaId}.m3u8
+    Per-quality MP4:
+      https://static.wixstatic.com/videos/{mediaId}/mp4/{mediaId},{quality}.mp4
+    Repackager master m3u8 (all qualities combined):
+      https://repackager.wixmp.com/video.wixstatic.com/video/{mediaId}/,480p,720p,/mp4/file.mp4.urlset/master.m3u8
+    Repackager per-quality m3u8 (480p / 720p / 1080p always):
+      https://repackager.wixmp.com/video.wixstatic.com/video/{mediaId}/,480p/mp4/file.mp4.urlset/master.m3u8
+      https://repackager.wixmp.com/video.wixstatic.com/video/{mediaId}/,720p/mp4/file.mp4.urlset/master.m3u8
+      https://repackager.wixmp.com/video.wixstatic.com/video/{mediaId}/,1080p/mp4/file.mp4.urlset/master.m3u8
 ─────────────────────────────────────────────────────────────────────────────────
 """
 
@@ -84,8 +90,9 @@ def _decode_allanime_def(hex_token: str) -> dict:
         secondary_id
         thumbnail   – relative Wix media thumbnail path
         qualities   – list of quality strings, e.g. ["480p", "720p"]
-        stream_urls – list of direct MP4 URLs per quality
-        m3u8_url    – HLS master playlist URL
+        stream_urls – list of direct MP4 URLs per quality (static.wixstatic.com)
+        m3u8_url    – repackager master HLS URL (all qualities combined in one playlist)
+        m3u8_urls   – list of per-quality repackager HLS URLs (480p, 720p, 1080p always)
         streamer_id – "Wix"
         key         – "ep-vDTSJHSpYnrkZnAvG_250_dub"
         date        – ISO date string from JSON
@@ -98,6 +105,7 @@ def _decode_allanime_def(hex_token: str) -> dict:
         "qualities":    [],
         "stream_urls":  [],
         "m3u8_url":     "",
+        "m3u8_urls":    [],
         "streamer_id":  "",
         "key":          "",
         "date":         "",
@@ -135,13 +143,35 @@ def _decode_allanime_def(hex_token: str) -> dict:
 
     media_id = result["media_id"]
     if media_id:
+        # ── Per-quality direct MP4s (static.wixstatic.com) ────────
         for q in result["qualities"]:
             result["stream_urls"].append(
                 f"https://static.wixstatic.com/videos/{media_id}/mp4/{media_id},{q}.mp4"
             )
+
+        # ── Wix repackager HLS URLs ────────────────────────────────
+        # Sort qualities numerically (480p < 720p < 1080p …)
+        def _qsort(q):
+            m = re.match(r"(\d+)", q)
+            return int(m.group(1)) if m else 0
+
+        sorted_q = sorted(result["qualities"], key=_qsort)
+
+        # Master m3u8: all JSON qualities in one adaptive playlist
+        # Pattern: /,480p,720p,/mp4/file.mp4.urlset/master.m3u8
+        master_q_seg = "," + ",".join(sorted_q) + ","
         result["m3u8_url"] = (
-            f"https://static.wixstatic.com/videos/{media_id}/file/{media_id}.m3u8"
+            f"https://repackager.wixmp.com/video.wixstatic.com/video"
+            f"/{media_id}/{master_q_seg}/mp4/file.mp4.urlset/master.m3u8"
         )
+
+        # Per-quality m3u8s: JSON qualities + always include 1080p
+        all_q = sorted(set(sorted_q + ["1080p"]), key=_qsort)
+        result["m3u8_urls"] = [
+            f"https://repackager.wixmp.com/video.wixstatic.com/video"
+            f"/{media_id}/,{q}/mp4/file.mp4.urlset/master.m3u8"
+            for q in all_q
+        ]
 
     return result
 
@@ -229,10 +259,11 @@ def decode_iframe_url(iframe_url: str) -> dict:
     # ── Per-server decoding ──────────────────────────────────────
 
     if server_type == "def":
-        # AllAnime: token is raw hex, XOR 0x06 → JSON → Wix CDN
+        # AllAnime: token is raw hex, XOR 0x06 → JSON → Wix CDN + repackager HLS
         dec = _decode_allanime_def(token)
         result["stream_urls"] = dec.get("stream_urls", [])
         result["m3u8_url"]    = dec.get("m3u8_url", "")
+        result["m3u8_urls"]   = dec.get("m3u8_urls", [])
         result["qualities"]   = dec.get("qualities", [])
         result["extra"]       = {
             "media_id":     dec.get("media_id", ""),
@@ -673,6 +704,7 @@ def extract_one(watch_url: str, serial: int) -> dict | None:
             "ep_suffix":   decoded["ep_suffix"],
             "stream_urls": decoded["stream_urls"],
             "m3u8_url":    decoded.get("m3u8_url", ""),
+            "m3u8_urls":   decoded.get("m3u8_urls", []),
             "qualities":   decoded.get("qualities", []),
             "extra":       decoded.get("extra", {}),
         }
@@ -697,7 +729,9 @@ def extract_one(watch_url: str, serial: int) -> dict | None:
             print(f"    media_id:   {extra.get('media_id', '')}")
             print(f"    qualities:  {decoded.get('qualities', [])}")
             if decoded.get("m3u8_url"):
-                print(f"    m3u8:       {decoded['m3u8_url']}")
+                print(f"    m3u8_master:{decoded['m3u8_url']}")
+            for u in decoded.get("m3u8_urls", []):
+                print(f"    m3u8_qual:  {u}")
             for u in decoded["stream_urls"]:
                 print(f"    mp4:        {u}")
         elif stype == "vibeplayer":
