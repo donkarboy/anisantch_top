@@ -24,11 +24,13 @@ jobs:
 
       - run: playwright install chromium && playwright install-deps chromium
 
-      - run: python anisnatch_extract.py
+      - name: Run extractor
+        run: python anisnatch_extract.py
 
-      - run: |
+      - name: Commit updated files
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add streams.json
-          git diff --cached --quiet || git commit -m "update streams.json [$(date -u '+%Y-%m-%d %H:%M UTC')]"
+          git add streams*.json already_processed_urls_list.txt
+          git diff --cached --quiet || git commit -m "update streams [$(date -u '+%Y-%m-%d %H:%M UTC')]"
           git push
