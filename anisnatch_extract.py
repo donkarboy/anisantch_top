@@ -19,17 +19,15 @@ OUTPUT_FILE = "streams.json"
 
 
 def extract_stream_data(html):
-    result = {}
     stream_urls = []
 
     src_match = re.search(r'const\s+source\s*=\s*\{src\s*:\s*(\{[^}]+\})', html)
     if src_match:
         try:
             src_data = json.loads(src_match.group(1))
-            url = src_data.get("url", "")
-            if url:
-                stream_urls.append(url)
-                result["stream_type"] = src_data.get("type", "hls")
+            u = src_data.get("url", "")
+            if u:
+                stream_urls.append(u)
         except json.JSONDecodeError:
             pass
 
@@ -37,31 +35,41 @@ def extract_stream_data(html):
         if u not in stream_urls:
             stream_urls.append(u)
 
+    result = {}
+
+    # stream URLs: stream_url_1, stream_url_2, ...
     for i, u in enumerate(stream_urls, start=1):
         result[f"stream_url_{i}"] = u
 
+    result["found_streams"] = len(stream_urls)
+
     for pat, key in [
         (r"episodeNO\s*=\s*['\"](\d+)['\"]", "episode"),
-        (r"animeID\s*=\s*['\"](\d+)['\"]", "anime_id"),
-        (r"siteName\s*=\s*['\"](\w+)['\"]", "site_name"),
+        (r"animeID\s*=\s*['\"](\d+)['\"]",   "mal_id"),   # counted as MAL ID
+        (r"siteName\s*=\s*['\"](\w+)['\"]",   "site_name"),
         (r"thumbnails\s*:\s*['\"]([^'\"]+)['\"]", "thumbnails"),
     ]:
         m = re.search(pat, html)
         if m:
             result[key] = m.group(1)
 
-    for pat, key in [
-        (r'skips\s*:\s*(\[.*?\])', "skips"),
-        (r'subtitles\s*:\s*(\[.*?\])', "subtitles"),
-    ]:
-        m = re.search(pat, html, re.DOTALL)
-        if m:
-            try:
-                val = json.loads(m.group(1))
-                if val:
-                    result[key] = val
-            except json.JSONDecodeError:
-                pass
+    m = re.search(r'skips\s*:\s*(\[.*?\])', html, re.DOTALL)
+    if m:
+        try:
+            val = json.loads(m.group(1))
+            if val:
+                result["skips"] = val
+        except json.JSONDecodeError:
+            pass
+
+    m = re.search(r'subtitles\s*:\s*(\[.*?\])', html, re.DOTALL)
+    if m:
+        try:
+            val = json.loads(m.group(1))
+            if val:
+                result["subtitles"] = val
+        except json.JSONDecodeError:
+            pass
 
     return result
 
@@ -70,8 +78,8 @@ def extract_one(watch_url):
     from playwright.sync_api import sync_playwright
 
     anime_id = (re.search(r'/watch/(\d+)', watch_url) or [None, "?"])[1]
-    episode  = (re.search(r'ep=(\d+)', watch_url)     or [None, "?"])[1]
-    print(f"\n→ Anime {anime_id} Ep {episode}  |  {watch_url}")
+    episode  = (re.search(r'ep=(\d+)',     watch_url) or [None, "?"])[1]
+    print(f"\n→ Anime {anime_id}  Ep {episode}  |  {watch_url}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -79,7 +87,7 @@ def extract_one(watch_url):
             args=["--no-sandbox", "--disable-blink-features=AutomationControlled",
                   "--disable-dev-shm-usage"],
         )
-        ctx  = browser.new_context(
+        ctx = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
@@ -93,7 +101,8 @@ def extract_one(watch_url):
             browser.close()
             return None
 
-        iframe_src, frame = None, None
+        frame = None
+        iframe_src = ""
         try:
             el = page.wait_for_selector('iframe[src*="/video/def/"]', timeout=45_000)
             if el:
@@ -117,6 +126,10 @@ def extract_one(watch_url):
             pass
 
         html = frame.content()
+
+        # Try to grab page title for anime name
+        page_title = page.title()
+
         browser.close()
 
     data = extract_stream_data(html)
@@ -124,8 +137,25 @@ def extract_one(watch_url):
         print("  [ERROR] No stream URL found")
         return None
 
-    data["title"] = f"Anime {anime_id} – Episode {episode}"
-    return data
+    # Build clean title: prefer page title, fallback to generic
+    if page_title and page_title.strip():
+        title = page_title.strip()
+    else:
+        title = f"Anime {anime_id} – Episode {episode}"
+
+    # Compose final entry in required key order
+    entry = {
+        "url":   watch_url,
+        "title": title,
+    }
+    entry.update(data)
+
+    n = entry["found_streams"]
+    print(f"  ✓ {n} stream(s) found")
+    for i in range(1, n + 1):
+        print(f"    stream_url_{i}: {entry.get(f'stream_url_{i}','')}")
+
+    return entry
 
 
 def main():
@@ -143,7 +173,6 @@ def main():
         data = extract_one(url)
         if data:
             streams[url] = data
-            print(f"  ✓ {data.get('stream_url_1','')}")
             ok += 1
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
