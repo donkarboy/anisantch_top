@@ -48,9 +48,6 @@ OUTPUT JSON FORMAT (one entry per watch-URL, flat keys):
     // AniCdn / anicdn  (iframe == stream, one combined key)
     "anicdn_and_anicdn_iframe_are_same_url":     "<iframe url>",
 
-    // Optional: skip_marks / subtitles if found in page/iframe/JS
-    "skip_marks": [{"label": "Intro", "start": 0, "end": 90}, ...],
-    "subtitles":  [...],
   }
 
 IFRAME URL DECODING (all 9 server types handled without any iframe navigation):
@@ -298,16 +295,6 @@ def decode_iframe_url(iframe_url: str) -> dict:
 # SECTION 2 — FLAT ENTRY BUILDER
 # ══════════════════════════════════════════════════════════════════
 
-# Maps server_type → the key name used when iframe == stream (combined key)
-_SAME_KEY = {
-    "yt-mp4":   "aniyt_and_aniyt_iframe_are_same_url",
-    "megaplay": "megaplay_and_megaplay_iframe_are_same_url",
-    "vidwish":  "vidwish_and_vidwish_iframe_are_same_url",
-    "mp4":      "mp4_and_mp4_iframe_are_same_url",
-    "swift":    "swift_and_swift_iframe_are_same_url",
-    "anicdn":   "anicdn_and_anicdn_iframe_are_same_url",
-}
-
 # Canonical server-type order for key insertion
 _SERVER_ORDER = [
     "def",        # AllAnime
@@ -329,7 +316,6 @@ def build_flat_entry(
     anime_id:   str,
     episode:    str,
     servers:    list,   # from extract_servers_from_dom()
-    meta:       dict,   # from extract_meta_from_iframe()
 ) -> dict:
     """
     Build the flat output dict that matches the required JSON format exactly.
@@ -347,9 +333,6 @@ def build_flat_entry(
         MP4       → mp4_and_mp4_iframe_are_same_url
         Swift     → swift_and_swift_iframe_are_same_url
         AniCdn    → anicdn_and_anicdn_iframe_are_same_url
-
-    Optional meta keys (only when found in page/iframe HTML or JS globals):
-        skip_marks, subtitles
     """
 
     # ── 1. Decode every server's iframe URL ──────────────────────
@@ -407,22 +390,37 @@ def build_flat_entry(
             entry["anivibe_iframe"] = iurl
             entry["anivibe"]        = extra.get("player_url", "")
 
-        elif stype in _SAME_KEY:
-            entry[_SAME_KEY[stype]] = iurl
+        elif stype == "yt-mp4":
+            entry["aniyt_iframe"] = iurl
+            entry["aniyt"]        = iurl
+
+        elif stype == "megaplay":
+            entry["megaplay_iframe"] = iurl
+            entry["megaplay"]        = iurl
+
+        elif stype == "vidwish":
+            entry["vidwish_iframe"] = iurl
+            entry["vidwish"]        = iurl
+
+        elif stype == "mp4":
+            entry["mp4_iframe"] = iurl
+            entry["mp4"]        = iurl
+
+        elif stype == "swift":
+            entry["swift_iframe"] = iurl
+            entry["swift"]        = iurl
+
+        elif stype == "anicdn":
+            entry["anicdn_iframe"] = iurl
+            entry["anicdn"]        = iurl
 
         elif stype == "ok":
             entry["okcdn_iframe"] = iurl
             entry["okcdn"]        = extra.get("ok_embed_url", "")
 
         else:
-            # Unknown / future server type: store iframe URL with a generic key
             entry[f"{stype}_iframe"] = iurl
-
-    # ── 3. Optional meta (skip_marks / subtitles) ────────────────
-    if "skip_marks" in meta:
-        entry["skip_marks"] = meta["skip_marks"]
-    if "subtitles" in meta:
-        entry["subtitles"] = meta["subtitles"]
+            entry[stype]             = iurl
 
     return entry
 
@@ -442,11 +440,14 @@ def all_output_files():
 
 
 def load_all_streams():
-    merged = {}
+    # Returns a list of all entry dicts across all split files
+    merged = []
     for f in all_output_files():
         try:
             with open(f, "r", encoding="utf-8") as fh:
-                merged.update(json.load(fh))
+                data = json.load(fh)
+                if isinstance(data, list):
+                    merged.extend(data)
         except Exception:
             pass
     return merged
@@ -466,25 +467,27 @@ def current_write_target():
 
 def save_entry_to_file(url: str, entry: dict) -> str:
     target = current_write_target()
-    bucket: dict = {}
+    bucket: list = []
     if os.path.isfile(target):
         try:
             with open(target, "r", encoding="utf-8") as f:
                 bucket = json.load(f)
+            if not isinstance(bucket, list):
+                bucket = []
         except Exception:
-            bucket = {}
+            bucket = []
 
-    bucket[url] = entry
-    serialised  = json.dumps(bucket, indent=2, ensure_ascii=False)
+    bucket.append(entry)
+    serialised = json.dumps(bucket, indent=2, ensure_ascii=False)
 
     if len(serialised.encode("utf-8")) > MAX_FILE_BYTES and len(bucket) > 1:
-        del bucket[url]
+        bucket.pop()
         with open(target, "w", encoding="utf-8") as f:
             json.dump(bucket, f, indent=2, ensure_ascii=False)
         m      = re.search(r'_(\d+)' + re.escape(OUTPUT_EXT) + r'$', target)
         idx    = int(m.group(1)) + 1 if m else 2
         target = f"{OUTPUT_BASE}_{idx}{OUTPUT_EXT}"
-        bucket = {url: entry}
+        bucket = [entry]
         serialised = json.dumps(bucket, indent=2, ensure_ascii=False)
 
     with open(target, "w", encoding="utf-8") as f:
@@ -666,242 +669,6 @@ def extract_servers_from_dom(page) -> list:
     return servers
 
 
-def _extract_json_array(html: str, key: str):
-    """
-    Robustly extract the first JSON array assigned to `key` in an HTML/JS blob.
-
-    Handles all common patterns:
-        key: [...]                   (JS object literal)
-        key = [...]                  (JS variable assignment)
-        "key": [...]                 (JSON property)
-        'key': [...]                 (single-quoted JS)
-        var key=[...]
-        window.key=[...]
-        data-key='[...]'             (HTML attribute)
-
-    Uses bracket counting to find the exact closing ] even across multiple lines,
-    nested arrays/objects, and escaped quotes — far more reliable than .*? regex.
-    """
-    # Build a pattern that matches the start of the array for any of the forms above
-    pattern = re.compile(
-        r"""(?:
-            (?:var\s+|window\.|let\s+|const\s+)?   # optional JS prefix
-            (?:["']?)                               # optional opening quote
-            """ + re.escape(key) + r"""
-            (?:["']?)                               # optional closing quote
-            \s* [=:] \s*                            # = or :
-        |
-            data-""" + re.escape(key) + r"""\s*=\s*['"]  # HTML data-attr
-        )
-        (\[)                                        # capture the opening [
-        """,
-        re.VERBOSE | re.IGNORECASE,
-    )
-
-    for m in pattern.finditer(html):
-        start = m.start(1)   # position of the opening [
-        depth = 0
-        in_str  = False
-        str_ch  = ""
-        i = start
-        while i < len(html):
-            ch = html[i]
-            if in_str:
-                if ch == "\\" :
-                    i += 2          # skip escaped character
-                    continue
-                if ch == str_ch:
-                    in_str = False
-            else:
-                if ch in ('"', "'"):
-                    in_str = True
-                    str_ch = ch
-                elif ch == "[":
-                    depth += 1
-                elif ch == "]":
-                    depth -= 1
-                    if depth == 0:
-                        raw = html[start : i + 1]
-                        try:
-                            val = json.loads(raw)
-                            if isinstance(val, list) and val:
-                                return val
-                        except json.JSONDecodeError:
-                            # Try single→double quote fix for JS literals
-                            try:
-                                val = json.loads(raw.replace("'", '"'))
-                                if isinstance(val, list) and val:
-                                    return val
-                            except Exception:
-                                pass
-                        break   # malformed — try next match
-            i += 1
-
-    return None
-
-
-def extract_meta_from_iframe(page) -> dict:
-    """
-    Extract skip_marks and subtitles from every available HTML source.
-
-    Search order:
-      1. Main page HTML
-      2. Active iframe HTML  (after waiting for it to load)
-      3. JS evaluation INSIDE the iframe frame  (most reliable — skips lives here)
-      4. JS evaluation on the main page as a last-ditch attempt
-
-    The result key is always "skip_marks" (never "skips").
-    """
-    result  = {}
-    sources = []   # list of (label, html_string) to search
-
-    # ── Source 1: main page HTML ──────────────────────────────────
-    try:
-        sources.append(("main-page", page.content()))
-    except Exception as e:
-        print(f"  [META] Could not read main page HTML: {e}")
-
-    # ── Source 2 + 3: iframe HTML and JS eval INSIDE the frame ───
-    # The player page (anisnatch.to/video/def/...) sets JS variables like
-    #   skips = [{label:'Intro',start:0,end:90}, ...]
-    # inside its own <script> block.  We must evaluate these expressions
-    # in the iframe's JS context, not the parent page's context.
-    try:
-        # Wait up to 10 s for the iframe to appear
-        page.wait_for_selector(
-            "iframe#video-player, iframe[src*='/video/']",
-            timeout=10_000,
-        )
-        iframe_el = (page.query_selector("iframe#video-player") or
-                     page.query_selector("iframe[src*='/video/']"))
-        if iframe_el:
-            frame = iframe_el.content_frame()
-            if frame:
-                # Wait for the frame's DOM to be ready
-                try:
-                    frame.wait_for_load_state("domcontentloaded", timeout=10_000)
-                except Exception:
-                    time.sleep(2)
-
-                # Source 2: raw iframe HTML
-                try:
-                    iframe_html = frame.content()
-                    if iframe_html and len(iframe_html) > 200:
-                        sources.append(("iframe-html", iframe_html))
-                        print(f"  [META] Got iframe HTML ({len(iframe_html):,} bytes)")
-                    else:
-                        print("  [META] iframe HTML too small — skipping")
-                except Exception as e:
-                    print(f"  [META] Could not read iframe HTML: {e}")
-
-                # Source 3: JS eval INSIDE the iframe frame
-                # skips is a plain var in the player's <script>, not on window.*
-                # of the parent — so we MUST evaluate inside the iframe frame.
-                js_vars = [
-                    "typeof skips      !== 'undefined' ? skips      : null",
-                    "typeof skipTimes  !== 'undefined' ? skipTimes  : null",
-                    "typeof skipMarks  !== 'undefined' ? skipMarks  : null",
-                    "typeof introOutro !== 'undefined' ? introOutro : null",
-                    "typeof chapters   !== 'undefined' ? chapters   : null",
-                    "window.skips",
-                    "window.skipTimes",
-                    "window.skipMarks",
-                    "window.playerConfig && window.playerConfig.skips",
-                    "window.playerConfig && window.playerConfig.skipTimes",
-                ]
-                for expr in js_vars:
-                    try:
-                        val = frame.evaluate(
-                            f"() => {{ try {{ return {expr}; }} catch(e) {{ return null; }} }}"
-                        )
-                        if isinstance(val, list) and val:
-                            sources.append(("iframe-js", json.dumps({"skips": val})))
-                            print(f"  [META] iframe-js found skips via ({expr}): {val}")
-                            break
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"  [META] iframe access failed: {e}")
-
-    # ── Source 4: JS eval on main page (last resort) ─────────────
-    for expr in [
-        "typeof skips     !== 'undefined' ? skips     : null",
-        "typeof skipTimes !== 'undefined' ? skipTimes : null",
-        "typeof skipMarks !== 'undefined' ? skipMarks : null",
-        "window.skips", "window.skipTimes", "window.skipMarks",
-    ]:
-        try:
-            val = page.evaluate(
-                f"() => {{ try {{ return {expr}; }} catch(e) {{ return null; }} }}"
-            )
-            if isinstance(val, list) and val:
-                sources.append(("main-js", json.dumps({"skips": val})))
-                print(f"  [META] main-js found skips via ({expr}): {val}")
-                break
-        except Exception:
-            pass
-
-    # ── Skip-mark key aliases to search (in priority order) ───────
-    SKIP_KEYS     = ["skips", "skipTimes", "skipMarks", "skip_marks",
-                     "introOutro", "intro_outro", "chapters", "cuePoints"]
-    SUBTITLE_KEYS = ["subtitles", "tracks", "captions", "textTracks"]
-
-    for label, html in sources:
-        if not html:
-            continue
-
-        # Skip marks
-        if "skip_marks" not in result:
-            for key in SKIP_KEYS:
-                val = _extract_json_array(html, key)
-                if val:
-                    # Normalise: each item should have at least {start, end}
-                    # Accept both {start,end,label} and {startTime,endTime,type} forms
-                    normalised = []
-                    for item in val:
-                        if not isinstance(item, dict):
-                            continue
-                        entry: dict = {}
-                        # label / type / name
-                        for lk in ("label", "type", "name", "title"):
-                            if lk in item:
-                                entry["label"] = str(item[lk])
-                                break
-                        # start time
-                        for sk in ("start", "startTime", "start_time", "from", "begin"):
-                            if sk in item:
-                                entry["start"] = item[sk]
-                                break
-                        # end time
-                        for ek in ("end", "endTime", "end_time", "to", "stop"):
-                            if ek in item:
-                                entry["end"] = item[ek]
-                                break
-                        if "start" in entry and "end" in entry:
-                            normalised.append(entry)
-                    if normalised:
-                        result["skip_marks"] = normalised
-                        print(f"  [META] skip_marks found via key='{key}' in {label}: {normalised}")
-                        break
-
-        # Subtitles
-        if "subtitles" not in result:
-            for key in SUBTITLE_KEYS:
-                val = _extract_json_array(html, key)
-                if val:
-                    result["subtitles"] = val
-                    print(f"  [META] subtitles found via key='{key}' in {label}")
-                    break
-
-        if "skip_marks" in result and "subtitles" in result:
-            break   # both found — no need to check remaining sources
-
-    if "skip_marks" not in result:
-        print("  [META] skip_marks: not found in any source")
-    if "subtitles" not in result:
-        print("  [META] subtitles: not found in any source")
-
-    return result
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -973,9 +740,6 @@ def extract_one(watch_url: str, serial: int) -> dict | None:
             print(f"    {s['label']}{info_tag}  server={s['server']}{active_tag}")
             print(f"      iframe_url: {s['iframe_url']}")
 
-        # ── 4. Pull meta from the active iframe ────────────────────
-        meta = extract_meta_from_iframe(page)
-
         page_title = page.title()
         browser.close()
 
@@ -993,14 +757,12 @@ def extract_one(watch_url: str, serial: int) -> dict | None:
         anime_id  = anime_id,
         episode   = episode,
         servers   = servers,
-        meta      = meta,
     )
 
     # ── 6. Summary ────────────────────────────────────────────────
     server_keys = [
         k for k in entry
-        if k not in ("serial", "title", "url", "mal_id_with_ep_and_stream_type",
-                     "skip_marks", "subtitles")
+        if k not in ("serial", "title", "url", "mal_id_with_ep_and_stream_type")
     ]
     print(f"  ✓ serial={serial}  {len(servers)} DUB server(s)  {len(server_keys)} stream key(s)")
     for k in server_keys:
@@ -1050,10 +812,8 @@ def main():
     print(f"[INFO] {len(processed)} URL(s) already processed — skipping")
 
     all_streams      = load_all_streams()
-    existing_serials = [
-        v.get("serial", 0) for v in all_streams.values() if isinstance(v, dict)
-    ]
-    next_serial = max(existing_serials, default=0) + 1
+    existing_serials = [v.get("serial", 0) for v in all_streams if isinstance(v, dict)]
+    next_serial      = max(existing_serials, default=0) + 1
 
     pending = [u for u in input_urls if u not in processed]
     print(f"[INFO] {len(pending)} URL(s) pending")
@@ -1069,8 +829,11 @@ def main():
     errors = 0
 
     for url in batch:
-        if url in all_streams and "serial" in all_streams[url]:
-            serial = all_streams[url]["serial"]
+        processed_entry = next(
+            (e for e in all_streams if isinstance(e, dict) and e.get("url") == url), None
+        )
+        if processed_entry and "serial" in processed_entry:
+            serial = processed_entry["serial"]
         else:
             serial      = next_serial
             next_serial += 1
