@@ -1,0 +1,412 @@
+{
+  "https://anisnatch.top/watch/1735?ep=250": {
+    "serial": 1,
+    "title": "Naruto: Shippuuden - AniSnatch",
+    "url": "https://anisnatch.top/watch/1735?ep=250",
+    "type": "dub",
+    "dub_servers": [
+      {
+        "server": "allmanga-allanime",
+        "label": "AllAnime",
+        "info": "",
+        "active": true,
+        "server_type": "def",
+        "iframe_url": "https://anisnatch.to/video/def/7d2473746a243c243565353737325933363635656431343460673732363165643664326260643e3462603136376234267a263f35323f3e6260306734303137303537303336603032323135653f646064343f267a266b63626f67293565353737325933363635656431343460673732363165643664326260643e346260313637623460363637286c7661267a262a323e36762a313436762a242a2475727463676b63744f62243c24516f7e242a2462677263243c24343634302b36312b373e5236353c33313c3636283636365c242a2472746768756a67726f6968527f7663243c24627364242a246d637f243c2463762b704252554c4e55765f68746d5c684770415934333659627364247b/1735-250",
+        "token": "7d2473746a243c243565353737325933363635656431343460673732363165643664326260643e3462603136376234267a263f35323f3e6260306734303137303537303336603032323135653f646064343f267a266b63626f67293565353737325933363635656431343460673732363165643664326260643e346260313637623460363637286c7661267a262a323e36762a313436762a242a2475727463676b63744f62243c24516f7e242a2462677263243c24343634302b36312b373e5236353c33313c3636283636365c242a2472746768756a67726f6968527f7663243c24627364242a246d637f243c2463762b704252554c4e55765f68746d5c684770415934333659627364247b",
+        "ep_suffix": "1735-250",
+        "stream_urls": [],
+        "m3u8_url": "https://repackager.wixmp.com/video.wixstatic.com/video/3c3114_5003cb722fa1407cb0b4dfb82df701d2/,480p,720p,/mp4/file.mp4.urlset/master.m3u8",
+        "m3u8_urls": [
+          "https://repackager.wixmp.com/video.wixstatic.com/video/3c3114_5003cb722fa1407cb0b4dfb82df701d2/,480p/mp4/file.mp4.urlset/master.m3u8",
+          "https://repackager.wixmp.com/video.wixstatic.com/video/3c3114_5003cb722fa1407cb0b4dfb82df701d2/,720p/mp4/file.mp4.urlset/master.m3u8",
+          "https://repackager.wixmp.com/video.wixstatic.com/video/3c3114_5003cb722fa1407cb0b4dfb82df701d2/,1080p/mp4/file.mp4.urlset/master.m3u8"
+        ],
+        "qualities": [
+          "480p",
+          "720p"
+        ],
+        "extra": {
+          "media_id": "3c3114_5003cb722fa1407cb0b4dfb82df701d2",
+          "secondary_id": "93498df6a2671631650f64473c9bfb29",
+          "thumbnail": "media/3c3114_5003cb722fa1407cb0b4dfb82df701d2f001.jpg",
+          "streamer_id": "Wix",
+          "wix_key": "ep-vDTSJHSpYnrkZnAvG_250_dub",
+          "date": "2026-07-18T03:57:00.000Z",
+          "raw_json": {
+            "url": "3c3114_5003cb722fa1407cb0b4dfb82df701d2 | 93498df6a2671631650f64473c9bfb29 | media/3c3114_5003cb722fa1407cb0b4dfb82df701d2f001.jpg | ,480p,720p,",
+            "streamerId": "Wix",
+            "date": "2026-07-18T03:57:00.000Z",
+            "translationType": "dub",
+            "key": "ep-vDTSJHSpYnrkZnAvG_250_dub"
+          }
+        }
+      },
+      {
+        "server": "animedao-vibe-hd-1",
+        "label": "AniVibe",
+        "info": "",
+        "active": false,
+        "server_type": "vibeplayer",
+        "iframe_url": "https://anisnatch.to/video/vibeplayer/aHR0cHM6Ly92aXZpYmViZS5zaXRlLzIwNTAyZTkyY2Q4NTlhMDA=/1735-250",
+        "token": "aHR0cHM6Ly92aXZpYmViZS5zaXRlLzIwNTAyZTkyY2Q4NTlhMDA=",
+        "ep_suffix": "1735-250",
+        "stream_urls": [
+          "https://vivibebe.site/20502e92cd859a00"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "player_url": "https://vivibebe.site/20502e92cd859a00"
+        }
+      },
+      {
+        "server": "allmanga-yt",
+        "label": "AniYT",
+        "info": "MP4",
+        "active": false,
+        "server_type": "yt-mp4",
+        "iframe_url": "https://anisnatch.to/video/yt-mp4/vDTSJHSpYnrkZnAvG-250-dub/1735-250",
+        "token": "vDTSJHSpYnrkZnAvG-250-dub",
+        "ep_suffix": "1735-250",
+        "stream_urls": [
+          "https://anisnatch.to/video/yt-mp4/vDTSJHSpYnrkZnAvG-250-dub/1735-250"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "yt_key": "vDTSJHSpYnrkZnAvG-250-dub"
+        }
+      },
+      {
+        "server": "anikoto-megaplay",
+        "label": "Megaplay",
+        "info": "",
+        "active": false,
+        "server_type": "megaplay",
+        "iframe_url": "https://anisnatch.to/video/megaplay/8131-dub/1735-250",
+        "token": "8131-dub",
+        "ep_suffix": "1735-250",
+        "stream_urls": [
+          "https://anisnatch.to/video/megaplay/8131-dub/1735-250"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "megaplay_id": "8131"
+        }
+      },
+      {
+        "server": "anikoto-vidwish",
+        "label": "Vidwish",
+        "info": "",
+        "active": false,
+        "server_type": "vidwish",
+        "iframe_url": "https://anisnatch.to/video/vidwish/8131-dub/1735-250",
+        "token": "8131-dub",
+        "ep_suffix": "1735-250",
+        "stream_urls": [
+          "https://anisnatch.to/video/vidwish/8131-dub/1735-250"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "vidwish_id": "8131"
+        }
+      },
+      {
+        "server": "allmanga-ok",
+        "label": "OkCdn",
+        "info": "",
+        "active": false,
+        "server_type": "ok",
+        "iframe_url": "https://anisnatch.to/video/ok/2681660443282/1735-250",
+        "token": "2681660443282",
+        "ep_suffix": "1735-250",
+        "stream_urls": [
+          "https://ok.ru/videoembed/2681660443282"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "ok_video_id": "2681660443282",
+          "ok_embed_url": "https://ok.ru/videoembed/2681660443282"
+        }
+      },
+      {
+        "server": "allmanga-mp4",
+        "label": "MP4",
+        "info": "MP4",
+        "active": false,
+        "server_type": "mp4",
+        "iframe_url": "https://anisnatch.to/video/mp4/daim3kvm73gr/1735-250",
+        "token": "daim3kvm73gr",
+        "ep_suffix": "1735-250",
+        "stream_urls": [
+          "https://anisnatch.to/video/mp4/daim3kvm73gr/1735-250"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "mp4_slug": "daim3kvm73gr"
+        }
+      },
+      {
+        "server": "hindi-swift",
+        "label": "Swift",
+        "info": "HINDI",
+        "active": false,
+        "server_type": "swift",
+        "iframe_url": "https://anisnatch.to/video/swift/NPFh1x0PD8PANnB/1735-250",
+        "token": "NPFh1x0PD8PANnB",
+        "ep_suffix": "1735-250",
+        "stream_urls": [
+          "https://anisnatch.to/video/swift/NPFh1x0PD8PANnB/1735-250"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "swift_token": "NPFh1x0PD8PANnB"
+        }
+      },
+      {
+        "server": "anicdn-multi",
+        "label": "AniCdn",
+        "info": "MULTI",
+        "active": false,
+        "server_type": "anicdn",
+        "iframe_url": "https://anisnatch.to/video/anicdn/23676d53987033371f526c5c6eb56150/1735-250",
+        "token": "23676d53987033371f526c5c6eb56150",
+        "ep_suffix": "1735-250",
+        "stream_urls": [
+          "https://anisnatch.to/video/anicdn/23676d53987033371f526c5c6eb56150/1735-250"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "anicdn_hash": "23676d53987033371f526c5c6eb56150"
+        }
+      }
+    ],
+    "stream_url_1": "https://vivibebe.site/20502e92cd859a00",
+    "stream_url_2": "https://anisnatch.to/video/yt-mp4/vDTSJHSpYnrkZnAvG-250-dub/1735-250",
+    "stream_url_3": "https://anisnatch.to/video/megaplay/8131-dub/1735-250",
+    "stream_url_4": "https://anisnatch.to/video/vidwish/8131-dub/1735-250",
+    "stream_url_5": "https://ok.ru/videoembed/2681660443282",
+    "stream_url_6": "https://anisnatch.to/video/mp4/daim3kvm73gr/1735-250",
+    "stream_url_7": "https://anisnatch.to/video/swift/NPFh1x0PD8PANnB/1735-250",
+    "stream_url_8": "https://anisnatch.to/video/anicdn/23676d53987033371f526c5c6eb56150/1735-250"
+  },
+  "https://anisnatch.top/watch/1735?ep=251": {
+    "serial": 2,
+    "title": "Naruto: Shippuuden - AniSnatch",
+    "url": "https://anisnatch.top/watch/1735?ep=251",
+    "type": "dub",
+    "dub_servers": [
+      {
+        "server": "allmanga-allanime",
+        "label": "AllAnime",
+        "info": "",
+        "active": true,
+        "server_type": "def",
+        "iframe_url": "https://anisnatch.to/video/def/7d2473746a243c24346562603e6459366733326737636331303763323560323f3030343e373337323f3e3330653330267a263267306067303562373364606531373562353e33366735646435636564333365267a266b63626f6729346562603e6459366733326737636331303763323560323f3030343e373337323f3e333065333060363637286c7661267a262a313436762a323e36762a242a2475727463676b63744f62243c24516f7e242a2462677263243c24343634302b36312b373e5236333c32343c3636283636365c242a2472746768756a67726f6968527f7663243c24627364242a246d637f243c2463762b704252554c4e55765f68746d5c684770415934333759627364247b/1735-251",
+        "token": "7d2473746a243c24346562603e6459366733326737636331303763323560323f3030343e373337323f3e3330653330267a263267306067303562373364606531373562353e33366735646435636564333365267a266b63626f6729346562603e6459366733326737636331303763323560323f3030343e373337323f3e333065333060363637286c7661267a262a313436762a323e36762a242a2475727463676b63744f62243c24516f7e242a2462677263243c24343634302b36312b373e5236333c32343c3636283636365c242a2472746768756a67726f6968527f7663243c24627364242a246d637f243c2463762b704252554c4e55765f68746d5c684770415934333759627364247b",
+        "ep_suffix": "1735-251",
+        "stream_urls": [],
+        "m3u8_url": "https://repackager.wixmp.com/video.wixstatic.com/video/2cdf8b_0a54a1ee761e43f49662815149856c56/,480p,720p,/mp4/file.mp4.urlset/master.m3u8",
+        "m3u8_urls": [
+          "https://repackager.wixmp.com/video.wixstatic.com/video/2cdf8b_0a54a1ee761e43f49662815149856c56/,480p/mp4/file.mp4.urlset/master.m3u8",
+          "https://repackager.wixmp.com/video.wixstatic.com/video/2cdf8b_0a54a1ee761e43f49662815149856c56/,720p/mp4/file.mp4.urlset/master.m3u8",
+          "https://repackager.wixmp.com/video.wixstatic.com/video/2cdf8b_0a54a1ee761e43f49662815149856c56/,1080p/mp4/file.mp4.urlset/master.m3u8"
+        ],
+        "qualities": [
+          "720p",
+          "480p"
+        ],
+        "extra": {
+          "media_id": "2cdf8b_0a54a1ee761e43f49662815149856c56",
+          "secondary_id": "4a6fa63d15bfc713d3850a3bb3ecb55c",
+          "thumbnail": "media/2cdf8b_0a54a1ee761e43f49662815149856c56f001.jpg",
+          "streamer_id": "Wix",
+          "wix_key": "ep-vDTSJHSpYnrkZnAvG_251_dub",
+          "date": "2026-07-18T05:42:00.000Z",
+          "raw_json": {
+            "url": "2cdf8b_0a54a1ee761e43f49662815149856c56 | 4a6fa63d15bfc713d3850a3bb3ecb55c | media/2cdf8b_0a54a1ee761e43f49662815149856c56f001.jpg | ,720p,480p,",
+            "streamerId": "Wix",
+            "date": "2026-07-18T05:42:00.000Z",
+            "translationType": "dub",
+            "key": "ep-vDTSJHSpYnrkZnAvG_251_dub"
+          }
+        }
+      },
+      {
+        "server": "animedao-vibe-hd-1",
+        "label": "AniVibe",
+        "info": "",
+        "active": false,
+        "server_type": "vibeplayer",
+        "iframe_url": "https://anisnatch.to/video/vibeplayer/aHR0cHM6Ly92aXZpYmViZS5zaXRlLzU2N2FkZTI4MmU2ZjNjYjM=/1735-251",
+        "token": "aHR0cHM6Ly92aXZpYmViZS5zaXRlLzU2N2FkZTI4MmU2ZjNjYjM=",
+        "ep_suffix": "1735-251",
+        "stream_urls": [
+          "https://vivibebe.site/567ade282e6f3cb3"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "player_url": "https://vivibebe.site/567ade282e6f3cb3"
+        }
+      },
+      {
+        "server": "allmanga-yt",
+        "label": "AniYT",
+        "info": "MP4",
+        "active": false,
+        "server_type": "yt-mp4",
+        "iframe_url": "https://anisnatch.to/video/yt-mp4/vDTSJHSpYnrkZnAvG-251-dub/1735-251",
+        "token": "vDTSJHSpYnrkZnAvG-251-dub",
+        "ep_suffix": "1735-251",
+        "stream_urls": [
+          "https://anisnatch.to/video/yt-mp4/vDTSJHSpYnrkZnAvG-251-dub/1735-251"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "yt_key": "vDTSJHSpYnrkZnAvG-251-dub"
+        }
+      },
+      {
+        "server": "anikoto-megaplay",
+        "label": "Megaplay",
+        "info": "",
+        "active": false,
+        "server_type": "megaplay",
+        "iframe_url": "https://anisnatch.to/video/megaplay/8132-dub/1735-251",
+        "token": "8132-dub",
+        "ep_suffix": "1735-251",
+        "stream_urls": [
+          "https://anisnatch.to/video/megaplay/8132-dub/1735-251"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "megaplay_id": "8132"
+        }
+      },
+      {
+        "server": "anikoto-vidwish",
+        "label": "Vidwish",
+        "info": "",
+        "active": false,
+        "server_type": "vidwish",
+        "iframe_url": "https://anisnatch.to/video/vidwish/8132-dub/1735-251",
+        "token": "8132-dub",
+        "ep_suffix": "1735-251",
+        "stream_urls": [
+          "https://anisnatch.to/video/vidwish/8132-dub/1735-251"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "vidwish_id": "8132"
+        }
+      },
+      {
+        "server": "allmanga-ok",
+        "label": "OkCdn",
+        "info": "",
+        "active": false,
+        "server_type": "ok",
+        "iframe_url": "https://anisnatch.to/video/ok/2681658673810/1735-251",
+        "token": "2681658673810",
+        "ep_suffix": "1735-251",
+        "stream_urls": [
+          "https://ok.ru/videoembed/2681658673810"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "ok_video_id": "2681658673810",
+          "ok_embed_url": "https://ok.ru/videoembed/2681658673810"
+        }
+      },
+      {
+        "server": "allmanga-mp4",
+        "label": "MP4",
+        "info": "MP4",
+        "active": false,
+        "server_type": "mp4",
+        "iframe_url": "https://anisnatch.to/video/mp4/o5a5b62nfmwp/1735-251",
+        "token": "o5a5b62nfmwp",
+        "ep_suffix": "1735-251",
+        "stream_urls": [
+          "https://anisnatch.to/video/mp4/o5a5b62nfmwp/1735-251"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "mp4_slug": "o5a5b62nfmwp"
+        }
+      },
+      {
+        "server": "hindi-swift",
+        "label": "Swift",
+        "info": "HINDI",
+        "active": false,
+        "server_type": "swift",
+        "iframe_url": "https://anisnatch.to/video/swift/lPTLyEntJefvMsc/1735-251",
+        "token": "lPTLyEntJefvMsc",
+        "ep_suffix": "1735-251",
+        "stream_urls": [
+          "https://anisnatch.to/video/swift/lPTLyEntJefvMsc/1735-251"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "swift_token": "lPTLyEntJefvMsc"
+        }
+      },
+      {
+        "server": "anicdn-multi",
+        "label": "AniCdn",
+        "info": "MULTI",
+        "active": false,
+        "server_type": "anicdn",
+        "iframe_url": "https://anisnatch.to/video/anicdn/dbe1a0a2c9bd9241b3499318bf96f756/1735-251",
+        "token": "dbe1a0a2c9bd9241b3499318bf96f756",
+        "ep_suffix": "1735-251",
+        "stream_urls": [
+          "https://anisnatch.to/video/anicdn/dbe1a0a2c9bd9241b3499318bf96f756/1735-251"
+        ],
+        "m3u8_url": "",
+        "m3u8_urls": [],
+        "qualities": [],
+        "extra": {
+          "anicdn_hash": "dbe1a0a2c9bd9241b3499318bf96f756"
+        }
+      }
+    ],
+    "stream_url_1": "https://vivibebe.site/567ade282e6f3cb3",
+    "stream_url_2": "https://anisnatch.to/video/yt-mp4/vDTSJHSpYnrkZnAvG-251-dub/1735-251",
+    "stream_url_3": "https://anisnatch.to/video/megaplay/8132-dub/1735-251",
+    "stream_url_4": "https://anisnatch.to/video/vidwish/8132-dub/1735-251",
+    "stream_url_5": "https://ok.ru/videoembed/2681658673810",
+    "stream_url_6": "https://anisnatch.to/video/mp4/o5a5b62nfmwp/1735-251",
+    "stream_url_7": "https://anisnatch.to/video/swift/lPTLyEntJefvMsc/1735-251",
+    "stream_url_8": "https://anisnatch.to/video/anicdn/dbe1a0a2c9bd9241b3499318bf96f756/1735-251"
+  }
+}
