@@ -1,10 +1,10 @@
 """
-anisnatch_extract.py — Stream URL Extractor for anisnatch.top
+anisnatch_extract.py — Stream URL Extractor for anisnatch.to
 - Reads input URLs from:      inputed_urls_list.txt
 - Skips already-done URLs in: already_processed_urls_list.txt
 - Logs failed URLs to:        error_faced_urls_list.txt
 - Writes output to:           streams.json, streams_2.json … (auto-splits at 3 MB)
-- Extracts DUB streams only.
+- Extracts DUB streams ONLY.
 - Batch size controlled by CLI arg: python anisnatch_extract.py --limit 100
 """
 
@@ -31,7 +31,7 @@ MAX_FILE_BYTES = 3 * 1024 * 1024   # 3 MB
 
 def all_output_files():
     """Return sorted list of existing streams*.json files."""
-    base    = glob.glob(OUTPUT_BASE + OUTPUT_EXT)
+    base     = glob.glob(OUTPUT_BASE + OUTPUT_EXT)
     numbered = sorted(
         glob.glob(f"{OUTPUT_BASE}_*{OUTPUT_EXT}"),
         key=lambda f: int(re.search(r'_(\d+)' + re.escape(OUTPUT_EXT) + r'$', f).group(1))
@@ -41,7 +41,6 @@ def all_output_files():
 
 
 def load_all_streams():
-    """Load every split file into one merged dict."""
     merged = {}
     for f in all_output_files():
         try:
@@ -53,7 +52,6 @@ def load_all_streams():
 
 
 def current_write_target():
-    """Return filename that should receive the next entry."""
     files = all_output_files()
     if not files:
         return OUTPUT_BASE + OUTPUT_EXT
@@ -66,9 +64,7 @@ def current_write_target():
 
 
 def save_entry_to_file(url, entry):
-    """Append one entry to the correct split file; start new file if ≥ 3 MB."""
     target = current_write_target()
-
     bucket = {}
     if os.path.isfile(target):
         try:
@@ -80,13 +76,10 @@ def save_entry_to_file(url, entry):
     bucket[url] = entry
     serialised  = json.dumps(bucket, indent=2, ensure_ascii=False)
 
-    # If adding this entry pushes the file over 3 MB, close the current file
-    # and open a new split (only when the bucket already had other entries)
     if len(serialised.encode("utf-8")) > MAX_FILE_BYTES and len(bucket) > 1:
         del bucket[url]
         with open(target, "w", encoding="utf-8") as f:
             json.dump(bucket, f, indent=2, ensure_ascii=False)
-
         m      = re.search(r'_(\d+)' + re.escape(OUTPUT_EXT) + r'$', target)
         idx    = int(m.group(1)) + 1 if m else 2
         target = f"{OUTPUT_BASE}_{idx}{OUTPUT_EXT}"
@@ -95,7 +88,6 @@ def save_entry_to_file(url, entry):
 
     with open(target, "w", encoding="utf-8") as f:
         f.write(serialised)
-
     return target
 
 
@@ -114,7 +106,6 @@ def mark_processed(url):
 
 
 def mark_error(url, reason):
-    """Append a timestamped error entry to error_faced_urls_list.txt."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     with open(ERROR_FILE, "a", encoding="utf-8") as f:
         f.write(f"[{ts}]  {url}  |  {reason}\n")
@@ -151,7 +142,7 @@ def extract_stream_data(html, iframe_src=""):
         if u not in stream_urls:
             stream_urls.append(u)
 
-    # Expand multi-quality master into per-quality variants
+    # Expand multi-quality master URL into per-quality variants
     expanded = []
     for u in stream_urls:
         expanded.append(u)
@@ -200,46 +191,108 @@ def extract_stream_data(html, iframe_src=""):
     return result
 
 
+# ── DUB IFRAME FINDER (fixed for anisnatch.to) ───────────────────
+#
+# How DUB works on anisnatch.to (confirmed from traffic analysis):
+#
+#   1.  The page renders a #serverTypeMenu dropdown containing:
+#         <div class="dropdown-item" data-type="sub">Sub</div>
+#         <div class="dropdown-item" data-type="dub">Dub</div>
+#
+#   2.  Clicking the dub item triggers the JS router which calls
+#       api/loadSVs and reloads the <iframe id="video-player"> with
+#       the dub stream source — the iframe src itself is /video/def/…
+#       (no "dub" in the URL; the type is chosen by JS state).
+#
+#   3.  If no dub item exists in #serverTypeMenu the anime has no dub.
+#
+# Strategy:
+#   • Wait for #serverTypeMenu to appear.
+#   • Check for [data-type="dub"] inside it.
+#   • If found → click it, wait for the iframe to reload.
+#   • Grab the iframe and extract the stream from its HTML.
+# ─────────────────────────────────────────────────────────────────
+
 def find_dub_iframe(page):
+    """
+    Click the DUB option in the server-type dropdown and return
+    (frame, iframe_src).  Returns (None, "") if no dub is available.
+    """
     frame      = None
     iframe_src = ""
 
+    # ── 1. Wait for the page to settle and the type menu to appear ──
     try:
-        dub_btn = (
-            page.query_selector('text=DUB') or
+        page.wait_for_selector("#serverTypeMenu", timeout=15_000)
+    except Exception:
+        print("  [DUB] #serverTypeMenu not found — page may not have loaded")
+
+    # ── 2. Check whether a DUB option actually exists ──────────────
+    dub_selector = '#serverTypeMenu .dropdown-item[data-type="dub"]'
+    dub_item     = page.query_selector(dub_selector)
+
+    if not dub_item:
+        # Fallback: try the broader selectors used in the original code
+        dub_item = (
             page.query_selector('[data-type="dub"]') or
-            page.query_selector('.dub-btn') or
+            page.query_selector('.dub-btn')           or
             page.query_selector('button:has-text("DUB")') or
             page.query_selector('a:has-text("DUB")')
         )
-        if dub_btn:
-            print("  [DUB] Found DUB tab — clicking...")
-            dub_btn.click()
-            time.sleep(2)
-    except Exception as e:
-        print(f"  [DUB] Tab click skipped: {e}")
+
+    if not dub_item:
+        print("  [DUB] No DUB option found in server-type menu — anime has no dub")
+        return None, ""
+
+    # ── 3. Open the dropdown first if needed, then click DUB ───────
+    try:
+        # Some themes hide the menu behind a toggle button
+        toggle = page.query_selector('#serverTypeDropdown, [data-bs-toggle="dropdown"][aria-controls="serverTypeMenu"]')
+        if toggle and not page.query_selector('#serverTypeMenu.show'):
+            toggle.click()
+            time.sleep(0.5)
+    except Exception:
+        pass
 
     try:
-        for el in page.query_selector_all('iframe'):
-            src = el.get_attribute("src") or ""
-            if "dub" in src.lower():
-                iframe_src = src if src.startswith("http") else "https://anisnatch.top" + src
-                frame = el.content_frame()
-                print(f"  [DUB] Matched dub iframe: {iframe_src}")
-                break
-
-        if not frame:
-            el = page.query_selector('iframe[src*="/video/def/"]')
-            if el:
-                src = el.get_attribute("src") or ""
-                iframe_src = src if src.startswith("http") else "https://anisnatch.top" + src
-                frame = el.content_frame()
-                print(f"  [DUB] Using default iframe (post-click): {iframe_src}")
+        print("  [DUB] Clicking DUB item in #serverTypeMenu …")
+        dub_item.scroll_into_view_if_needed()
+        dub_item.click()
+        # Give the JS router time to reload the iframe
+        time.sleep(3)
     except Exception as e:
-        print(f"  [DUB] iframe search error: {e}")
+        print(f"  [DUB] Click failed: {e}")
+        return None, ""
+
+    # ── 4. Locate the video-player iframe ──────────────────────────
+    try:
+        # The iframe id is always "video-player"
+        iframe_el = page.wait_for_selector('iframe#video-player', timeout=10_000)
+        if iframe_el:
+            src = iframe_el.get_attribute("src") or ""
+            iframe_src = src if src.startswith("http") else "https://anisnatch.to" + src
+            frame      = iframe_el.content_frame()
+            print(f"  [DUB] video-player iframe: {iframe_src}")
+    except Exception as e:
+        print(f"  [DUB] iframe#video-player wait failed: {e}")
+
+    # ── 5. Final fallback: any /video/def/ iframe ──────────────────
+    if not frame:
+        try:
+            for el in page.query_selector_all('iframe'):
+                src = el.get_attribute("src") or ""
+                if "/video/def/" in src:
+                    iframe_src = src if src.startswith("http") else "https://anisnatch.to" + src
+                    frame      = el.content_frame()
+                    print(f"  [DUB] Fallback iframe (/video/def/): {iframe_src}")
+                    break
+        except Exception as e:
+            print(f"  [DUB] Fallback iframe search failed: {e}")
 
     return frame, iframe_src
 
+
+# ── SINGLE URL PROCESSOR ─────────────────────────────────────────
 
 def extract_one(watch_url, serial):
     from playwright.sync_api import sync_playwright
@@ -253,20 +306,27 @@ def extract_one(watch_url, serial):
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled",
-                  "--disable-dev-shm-usage"],
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ],
         )
         ctx = browser.new_context(
             user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/150.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1920, "height": 1080},
         )
         page = ctx.new_page()
 
+        # ── Navigate ───────────────────────────────────────────────
         try:
             page.goto(watch_url, wait_until="domcontentloaded", timeout=60_000)
+            # Extra settle time so JS can build the server-type menu
+            time.sleep(2)
         except Exception as e:
             error_reason = f"Navigation failed: {e}"
             print(f"  [ERROR] {error_reason}")
@@ -274,15 +334,17 @@ def extract_one(watch_url, serial):
             mark_error(watch_url, error_reason)
             return None
 
+        # ── Find and click DUB ────────────────────────────────────
         frame, iframe_src = find_dub_iframe(page)
 
         if not frame:
-            error_reason = "DUB iframe not found"
+            error_reason = "DUB iframe not found (no dub available or page error)"
             print(f"  [ERROR] {error_reason} — skipping")
             browser.close()
             mark_error(watch_url, error_reason)
             return None
 
+        # ── Wait for iframe content ────────────────────────────────
         try:
             frame.wait_for_load_state("domcontentloaded", timeout=15_000)
             time.sleep(2)
@@ -293,6 +355,7 @@ def extract_one(watch_url, serial):
         page_title = page.title()
         browser.close()
 
+    # ── Extract stream data from iframe HTML ───────────────────────
     data = extract_stream_data(html, iframe_src=iframe_src)
     if not any(k.startswith("stream_url_") for k in data):
         error_reason = "No stream URL found in DUB iframe"
@@ -336,7 +399,7 @@ def parse_args():
 def resolve_limit(raw):
     raw = raw.strip().lower()
     if raw == "full":
-        return None   # None = no limit → process everything
+        return None
     try:
         return int(raw)
     except ValueError:
@@ -351,28 +414,20 @@ def main():
     limit_label = "full" if limit is None else str(limit)
     print(f"[INFO] Batch limit: {limit_label} URL(s) per run\n")
 
-    # Load inputs
     input_urls = load_input_urls()
     processed  = load_processed_urls()
     print(f"[INFO] {len(processed)} URL(s) already processed — skipping")
 
-    # Global serial counter across all split files
-    all_streams   = load_all_streams()
+    all_streams      = load_all_streams()
     existing_serials = [
         v.get("serial", 0) for v in all_streams.values() if isinstance(v, dict)
     ]
     next_serial = max(existing_serials, default=0) + 1
 
-    # Pending = input minus already processed
     pending = [u for u in input_urls if u not in processed]
     print(f"[INFO] {len(pending)} URL(s) pending")
 
-    # Apply batch limit
-    if limit is not None:
-        batch = pending[:limit]
-    else:
-        batch = pending
-
+    batch = pending[:limit] if limit is not None else pending
     print(f"[INFO] Processing {len(batch)} URL(s) this run\n")
 
     if not batch:
@@ -393,11 +448,10 @@ def main():
 
         if entry:
             target = save_entry_to_file(url, entry)
-            mark_processed(url)           # ✓ save to already_processed_urls_list.txt
+            mark_processed(url)
             ok += 1
             print(f"  → Saved to {target}")
         else:
-            # error already logged inside extract_one via mark_error()
             errors += 1
 
     print(f"\n{'='*55}")
