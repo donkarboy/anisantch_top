@@ -1,0 +1,23 @@
+{
+  "https://anisnatch.top/watch/1735?ep=250": {
+    "stream_type": "hls",
+    "stream_url_1": "https://repackager.wixmp.com/video.wixstatic.com/video/f0bd20_29d2658b07a84b69b36a64b3a220b35c/,1080p,720p,480p,/mp4/file.mp4.urlset/master.m3u8",
+    "episode": "250",
+    "anime_id": "1735",
+    "site_name": "def",
+    "thumbnails": "https://thumbnails.p1y.top/1735-250",
+    "skips": [
+      {
+        "label": "Intro",
+        "start": 121,
+        "end": 211
+      },
+      {
+        "label": "Outro",
+        "start": 1266,
+        "end": 1356
+      }
+    ],
+    "title": "Anime 1735 – Episode 250"
+  }
+}
