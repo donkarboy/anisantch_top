@@ -18,41 +18,64 @@ URLS = [
 OUTPUT_FILE = "streams.json"
 
 
-def extract_stream_data(html):
+def extract_stream_data(html, iframe_src=""):
+    """
+    Returns a dict with:
+      iframe_url, stream_url_1..N, mal_id ("animeID/episode"), skips, subtitles
+    Excluded: found_streams, episode, site_name, thumbnails
+    """
     stream_urls = []
 
+    # 1) const source = {src: {...}} block
     src_match = re.search(r'const\s+source\s*=\s*\{src\s*:\s*(\{[^}]+\})', html)
     if src_match:
         try:
             src_data = json.loads(src_match.group(1))
             u = src_data.get("url", "")
-            if u:
+            if u and u not in stream_urls:
                 stream_urls.append(u)
         except json.JSONDecodeError:
             pass
 
+    # 2) All .m3u8 URLs in HTML
     for u in re.findall(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html):
         if u not in stream_urls:
             stream_urls.append(u)
 
+    # 3) Expand multi-quality master URL into per-quality variants
+    #    e.g. master contains ,1080p,720p,480p, → also add individual quality URLs
+    expanded = []
+    for u in stream_urls:
+        expanded.append(u)
+        multi = re.search(r'(https?://.+?/),(\d+p(?:,\d+p)+),(/[^\s"\'<>]+)', u)
+        if multi:
+            prefix, qualities, suffix = multi.group(1), multi.group(2), multi.group(3)
+            for q in qualities.split(","):
+                if q:
+                    variant = f"{prefix},{q}{suffix}"
+                    if variant not in expanded:
+                        expanded.append(variant)
+    stream_urls = expanded
+
     result = {}
 
-    # stream URLs: stream_url_1, stream_url_2, ...
+    # iframe URL
+    if iframe_src:
+        result["iframe_url"] = iframe_src
+
+    # stream_url_1, stream_url_2, ...
     for i, u in enumerate(stream_urls, start=1):
         result[f"stream_url_{i}"] = u
 
-    result["found_streams"] = len(stream_urls)
+    # mal_id as "animeID/episode"
+    anime_id_m = re.search(r"animeID\s*=\s*['\"](\d+)['\"]", html)
+    episode_m  = re.search(r"episodeNO\s*=\s*['\"](\d+)['\"]", html)
+    if anime_id_m and episode_m:
+        result["mal_id"] = f"{anime_id_m.group(1)}/{episode_m.group(1)}"
+    elif anime_id_m:
+        result["mal_id"] = anime_id_m.group(1)
 
-    for pat, key in [
-        (r"episodeNO\s*=\s*['\"](\d+)['\"]", "episode"),
-        (r"animeID\s*=\s*['\"](\d+)['\"]",   "mal_id"),   # counted as MAL ID
-        (r"siteName\s*=\s*['\"](\w+)['\"]",   "site_name"),
-        (r"thumbnails\s*:\s*['\"]([^'\"]+)['\"]", "thumbnails"),
-    ]:
-        m = re.search(pat, html)
-        if m:
-            result[key] = m.group(1)
-
+    # skips
     m = re.search(r'skips\s*:\s*(\[.*?\])', html, re.DOTALL)
     if m:
         try:
@@ -62,6 +85,7 @@ def extract_stream_data(html):
         except json.JSONDecodeError:
             pass
 
+    # subtitles (kept if present)
     m = re.search(r'subtitles\s*:\s*(\[.*?\])', html, re.DOTALL)
     if m:
         try:
@@ -106,7 +130,12 @@ def extract_one(watch_url):
         try:
             el = page.wait_for_selector('iframe[src*="/video/def/"]', timeout=45_000)
             if el:
-                iframe_src = el.get_attribute("src") or ""
+                raw_src = el.get_attribute("src") or ""
+                # Build full iframe URL
+                if raw_src.startswith("http"):
+                    iframe_src = raw_src
+                else:
+                    iframe_src = "https://anisnatch.top" + raw_src
                 frame = el.content_frame()
         except Exception:
             pass
@@ -116,9 +145,6 @@ def extract_one(watch_url):
             browser.close()
             return None
 
-        if not iframe_src.startswith("http"):
-            iframe_src = "https://anisnatch.top" + iframe_src
-
         try:
             frame.wait_for_load_state("domcontentloaded", timeout=15_000)
             time.sleep(2)
@@ -126,34 +152,27 @@ def extract_one(watch_url):
             pass
 
         html = frame.content()
-
-        # Try to grab page title for anime name
         page_title = page.title()
-
         browser.close()
 
-    data = extract_stream_data(html)
+    data = extract_stream_data(html, iframe_src=iframe_src)
     if not any(k.startswith("stream_url_") for k in data):
         print("  [ERROR] No stream URL found")
         return None
 
-    # Build clean title: prefer page title, fallback to generic
-    if page_title and page_title.strip():
-        title = page_title.strip()
-    else:
-        title = f"Anime {anime_id} – Episode {episode}"
+    title = page_title.strip() if page_title and page_title.strip() else f"Anime {anime_id} – Episode {episode}"
 
-    # Compose final entry in required key order
+    # Final entry: title → url → iframe_url → stream_urls → mal_id → skips/subtitles
     entry = {
-        "url":   watch_url,
         "title": title,
+        "url":   watch_url,
     }
     entry.update(data)
 
-    n = entry["found_streams"]
+    n = sum(1 for k in entry if k.startswith("stream_url_"))
     print(f"  ✓ {n} stream(s) found")
     for i in range(1, n + 1):
-        print(f"    stream_url_{i}: {entry.get(f'stream_url_{i}','')}")
+        print(f"    stream_url_{i}: {entry.get(f'stream_url_{i}', '')}")
 
     return entry
 
