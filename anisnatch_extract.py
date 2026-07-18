@@ -1,7 +1,7 @@
 """
 anisnatch_extract.py — Stream URL Extractor for anisnatch.top
-- Reads input URLs from:      inputed_urls_list.txt
-- Skips already-done URLs in: already_processed_urls_list.txt
+- Reads input URLs from:      inputed_urls_list.txt  (auto-splits at 5 000 URLs)
+- Skips already-done URLs in: already_processed_urls_list.txt (auto-splits at 5 000 URLs)
 - Logs failed URLs to:        error_faced_urls_list.txt
 - Writes output to:           streams.json, streams_2.json … (auto-splits at 3 MB)
 - Batch size controlled by CLI arg: python anisnatch_extract.py --limit 100
@@ -16,27 +16,139 @@ import glob
 import argparse
 from datetime import datetime, timezone
 
-# ── FILE PATHS ────────────────────────────────────────────────────
-INPUT_FILE     = "inputed_urls_list.txt"
-PROCESSED_FILE = "already_processed_urls_list.txt"
-ERROR_FILE     = "error_faced_urls_list.txt"
+# ── FILE PATHS & LIMITS ───────────────────────────────────────────
+INPUT_BASE     = "inputed_urls_list"           # → inputed_urls_list.txt, inputed_urls_list_2.txt …
+PROCESSED_BASE = "already_processed_urls_list" # → already_processed_urls_list.txt, _2.txt …
+ERROR_FILE     = "error_faced_urls_list.txt"   # single file (errors stay manageable)
 OUTPUT_BASE    = "streams"
 OUTPUT_EXT     = ".json"
-MAX_FILE_BYTES = 3 * 1024 * 1024   # 3 MB
+TXT_EXT        = ".txt"
+MAX_JSON_BYTES = 3 * 1024 * 1024  # 3 MB  — JSON split threshold
+MAX_TXT_URLS   = 5_000            # 5 000 URLs per .txt split file
+
+# Primary filenames (split files are _2, _3 …)
+INPUT_FILE     = INPUT_BASE     + TXT_EXT
+PROCESSED_FILE = PROCESSED_BASE + TXT_EXT
 # ─────────────────────────────────────────────────────────────────
 
 
-# ── AUTO-INIT REQUIRED FILES ─────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+#  TXT SPLIT-FILE HELPERS  (shared by input + processed lists)
+# ══════════════════════════════════════════════════════════════════
+
+def _txt_files(base):
+    """
+    Return sorted list of all split files for a given base name.
+    e.g. base="inputed_urls_list" →
+         ["inputed_urls_list.txt", "inputed_urls_list_2.txt", ...]
+    """
+    primary  = base + TXT_EXT
+    numbered = sorted(
+        glob.glob(f"{base}_*{TXT_EXT}"),
+        key=lambda f: int(m.group(1))
+        if (m := re.search(r'_(\d+)' + re.escape(TXT_EXT) + r'$', f))
+        else 0
+    )
+    result = []
+    if os.path.isfile(primary):
+        result.append(primary)
+    result.extend(numbered)
+    return result
+
+
+def _load_txt_urls(base):
+    """
+    Load every URL from all split files for `base`.
+    Returns a list (preserves order, deduplicates).
+    """
+    seen = set()
+    urls = []
+    for path in _txt_files(base):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                u = line.strip()
+                if u and not u.startswith("#") and u not in seen:
+                    seen.add(u)
+                    urls.append(u)
+    return urls
+
+
+def _count_txt_urls(path):
+    """Count non-blank, non-comment lines in a txt file."""
+    if not os.path.isfile(path):
+        return 0
+    with open(path, "r", encoding="utf-8") as f:
+        return sum(1 for ln in f if ln.strip() and not ln.startswith("#"))
+
+
+def _next_txt_write_target(base):
+    """
+    Return the file path that should receive the next URL append.
+    Creates a new split file when the current last file hits MAX_TXT_URLS.
+    """
+    files = _txt_files(base)
+    if not files:
+        return base + TXT_EXT   # primary file doesn't exist yet
+
+    last = files[-1]
+    if _count_txt_urls(last) >= MAX_TXT_URLS:
+        m   = re.search(r'_(\d+)' + re.escape(TXT_EXT) + r'$', last)
+        idx = int(m.group(1)) + 1 if m else 2
+        new = f"{base}_{idx}{TXT_EXT}"
+        print(f"[SPLIT] {last} hit {MAX_TXT_URLS} URLs → opening {new}")
+        return new
+    return last
+
+
+def _append_url_to_txt(base, url):
+    """Append one URL to the correct split file, splitting if needed."""
+    target = _next_txt_write_target(base)
+    with open(target, "a", encoding="utf-8") as f:
+        f.write(url + "\n")
+    return target
+
+
+def _split_existing_txt_if_needed(base):
+    """
+    On startup, check whether the primary (or any) txt file exceeds
+    MAX_TXT_URLS and redistribute URLs into correctly-sized splits.
+    Runs once per startup; safe to call repeatedly.
+    """
+    all_urls = _load_txt_urls(base)
+    if len(all_urls) <= MAX_TXT_URLS:
+        return   # nothing to do
+
+    print(f"[SPLIT] {base}* has {len(all_urls)} URLs — redistributing into {MAX_TXT_URLS}-URL chunks …")
+
+    # Wipe all existing split files for this base
+    for path in _txt_files(base):
+        os.remove(path)
+
+    # Rewrite in chunks
+    chunks = [all_urls[i:i + MAX_TXT_URLS] for i in range(0, len(all_urls), MAX_TXT_URLS)]
+    for idx, chunk in enumerate(chunks):
+        path = base + TXT_EXT if idx == 0 else f"{base}_{idx + 1}{TXT_EXT}"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"# {os.path.basename(path)} — auto-managed\n")
+            for u in chunk:
+                f.write(u + "\n")
+        print(f"  → {path}  ({len(chunk)} URLs)")
+
+
+# ══════════════════════════════════════════════════════════════════
+#  AUTO-INIT REQUIRED FILES
+# ══════════════════════════════════════════════════════════════════
 
 def init_files():
     """
-    Create any missing support files on first run so the repo always has them.
+    Create any missing support files on first run.
     Never overwrites existing content.
     """
     stubs = {
         PROCESSED_FILE: (
             "# already_processed_urls_list.txt\n"
             "# Auto-managed — one successfully processed URL per line.\n"
+            "# Auto-splits into _2.txt, _3.txt … at 5 000 URLs each.\n"
             "# Do NOT edit manually.\n"
         ),
         ERROR_FILE: (
@@ -53,24 +165,39 @@ def init_files():
         else:
             print(f"[INIT] Found   {path}  ✓")
 
+    # Also verify input file exists
+    if not os.path.isfile(INPUT_FILE):
+        with open(INPUT_FILE, "w", encoding="utf-8") as f:
+            f.write(
+                "# inputed_urls_list.txt\n"
+                "# Add one AniSnatch watch URL per line.\n"
+                "# Auto-splits into _2.txt, _3.txt … at 5 000 URLs each.\n"
+            )
+        print(f"[INIT] Created {INPUT_FILE}  (empty — add your URLs)")
+    else:
+        print(f"[INIT] Found   {INPUT_FILE}  ✓")
 
-# ── SPLIT-FILE MANAGEMENT ─────────────────────────────────────────
 
-def all_output_files():
+# ══════════════════════════════════════════════════════════════════
+#  JSON SPLIT-FILE MANAGEMENT
+# ══════════════════════════════════════════════════════════════════
+
+def all_json_files():
     """Return sorted list of existing streams*.json files."""
-    base    = glob.glob(OUTPUT_BASE + OUTPUT_EXT)
+    base     = glob.glob(OUTPUT_BASE + OUTPUT_EXT)
     numbered = sorted(
         glob.glob(f"{OUTPUT_BASE}_*{OUTPUT_EXT}"),
-        key=lambda f: int(re.search(r'_(\d+)' + re.escape(OUTPUT_EXT) + r'$', f).group(1))
-        if re.search(r'_(\d+)' + re.escape(OUTPUT_EXT) + r'$', f) else 0
+        key=lambda f: int(m.group(1))
+        if (m := re.search(r'_(\d+)' + re.escape(OUTPUT_EXT) + r'$', f))
+        else 0
     )
     return base + numbered
 
 
 def load_all_streams():
-    """Load every split file into one merged dict."""
+    """Load every JSON split file into one merged dict."""
     merged = {}
-    for f in all_output_files():
+    for f in all_json_files():
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 merged.update(json.load(fh))
@@ -79,13 +206,12 @@ def load_all_streams():
     return merged
 
 
-def current_write_target():
-    """Return filename that should receive the next entry."""
-    files = all_output_files()
+def _current_json_write_target():
+    files = all_json_files()
     if not files:
         return OUTPUT_BASE + OUTPUT_EXT
     last = files[-1]
-    if os.path.getsize(last) >= MAX_FILE_BYTES:
+    if os.path.getsize(last) >= MAX_JSON_BYTES:
         m   = re.search(r'_(\d+)' + re.escape(OUTPUT_EXT) + r'$', last)
         idx = int(m.group(1)) + 1 if m else 2
         return f"{OUTPUT_BASE}_{idx}{OUTPUT_EXT}"
@@ -93,8 +219,8 @@ def current_write_target():
 
 
 def save_entry_to_file(url, entry):
-    """Append one entry to the correct split file; start new file if ≥ 3 MB."""
-    target = current_write_target()
+    """Append one entry to the correct JSON split; open new file if ≥ 3 MB."""
+    target = _current_json_write_target()
 
     bucket = {}
     if os.path.isfile(target):
@@ -107,9 +233,7 @@ def save_entry_to_file(url, entry):
     bucket[url] = entry
     serialised  = json.dumps(bucket, indent=2, ensure_ascii=False)
 
-    # If adding this entry pushes the file over 3 MB, close the current file
-    # and open a new split (only when the bucket already had other entries)
-    if len(serialised.encode("utf-8")) > MAX_FILE_BYTES and len(bucket) > 1:
+    if len(serialised.encode("utf-8")) > MAX_JSON_BYTES and len(bucket) > 1:
         del bucket[url]
         with open(target, "w", encoding="utf-8") as f:
             json.dump(bucket, f, indent=2, ensure_ascii=False)
@@ -126,40 +250,45 @@ def save_entry_to_file(url, entry):
     return target
 
 
-# ── PROCESSED / ERROR LOGS ───────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+#  PROCESSED / ERROR LOGS
+# ══════════════════════════════════════════════════════════════════
 
 def load_processed_urls():
-    if not os.path.isfile(PROCESSED_FILE):
-        return set()
-    with open(PROCESSED_FILE, "r", encoding="utf-8") as f:
-        return {line.strip() for line in f if line.strip()}
+    """Load every URL from all already_processed_urls_list*.txt files."""
+    return set(_load_txt_urls(PROCESSED_BASE))
 
 
 def mark_processed(url):
-    with open(PROCESSED_FILE, "a", encoding="utf-8") as f:
-        f.write(url + "\n")
+    """Append URL to the correct processed split file."""
+    _append_url_to_txt(PROCESSED_BASE, url)
 
 
 def mark_error(url, reason):
-    """Append a timestamped error entry to error_faced_urls_list.txt."""
+    """Append a timestamped error line to error_faced_urls_list.txt."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     with open(ERROR_FILE, "a", encoding="utf-8") as f:
         f.write(f"[{ts}]  {url}  |  {reason}\n")
 
 
-# ── INPUT URL LIST ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+#  INPUT URL LIST
+# ══════════════════════════════════════════════════════════════════
 
 def load_input_urls():
-    if not os.path.isfile(INPUT_FILE):
+    """Load every URL from all inputed_urls_list*.txt files."""
+    if not _txt_files(INPUT_BASE):
         print(f"[ERROR] Input file not found: {INPUT_FILE}")
         sys.exit(1)
-    with open(INPUT_FILE, "r", encoding="utf-8") as f:
-        urls = [line.strip() for line in f if line.strip()]
-    print(f"[INFO] {len(urls)} URL(s) in {INPUT_FILE}")
+    urls = _load_txt_urls(INPUT_BASE)
+    files = _txt_files(INPUT_BASE)
+    print(f"[INFO] {len(urls)} URL(s) loaded from {len(files)} input file(s): {files}")
     return urls
 
 
-# ── STREAM EXTRACTION ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+#  STREAM EXTRACTION
+# ══════════════════════════════════════════════════════════════════
 
 def extract_stream_data(html, iframe_src=""):
     stream_urls = []
@@ -320,10 +449,12 @@ def extract_one(watch_url, serial):
     return entry
 
 
-# ── MAIN ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="AniSnatch DUB stream extractor")
+    parser = argparse.ArgumentParser(description="AniSnatch stream extractor")
     parser.add_argument(
         "--limit",
         type=str,
@@ -339,7 +470,7 @@ def parse_args():
 def resolve_limit(raw):
     raw = raw.strip().lower()
     if raw == "full":
-        return None   # None = no limit → process everything
+        return None
     try:
         return int(raw)
     except ValueError:
@@ -351,36 +482,39 @@ def main():
     args  = parse_args()
     limit = resolve_limit(args.limit)
 
-    # ── Auto-create missing support files before anything else ──
+    # ── 1. Auto-create missing support files ──
     print("[INIT] Checking required files...")
     init_files()
     print()
 
+    # ── 2. Auto-split oversized txt files if needed ──
+    print("[SPLIT] Checking txt file sizes...")
+    _split_existing_txt_if_needed(INPUT_BASE)
+    _split_existing_txt_if_needed(PROCESSED_BASE)
+    print()
+
     limit_label = "full" if limit is None else str(limit)
-    print(f"[INFO] Batch limit: {limit_label} URL(s) per run\n")
+    print(f"[INFO] Batch limit : {limit_label} URL(s) per run")
 
-    # Load inputs
+    # ── 3. Load all input URLs (across all input split files) ──
     input_urls = load_input_urls()
-    processed  = load_processed_urls()
-    print(f"[INFO] {len(processed)} URL(s) already processed — skipping")
 
-    # Global serial counter across all split files
-    all_streams   = load_all_streams()
-    existing_serials = [
-        v.get("serial", 0) for v in all_streams.values() if isinstance(v, dict)
-    ]
-    next_serial = max(existing_serials, default=0) + 1
+    # ── 4. Load already-processed URLs (across all processed split files) ──
+    processed = load_processed_urls()
+    proc_files = _txt_files(PROCESSED_BASE)
+    print(f"[INFO] {len(processed)} URL(s) already processed "
+          f"across {len(proc_files)} file(s): {proc_files}")
 
-    # Pending = input minus already processed
+    # ── 5. Global serial counter across all JSON split files ──
+    all_streams      = load_all_streams()
+    existing_serials = [v.get("serial", 0) for v in all_streams.values() if isinstance(v, dict)]
+    next_serial      = max(existing_serials, default=0) + 1
+
+    # ── 6. Build pending list & apply batch limit ──
     pending = [u for u in input_urls if u not in processed]
     print(f"[INFO] {len(pending)} URL(s) pending")
 
-    # Apply batch limit
-    if limit is not None:
-        batch = pending[:limit]
-    else:
-        batch = pending
-
+    batch = pending if limit is None else pending[:limit]
     print(f"[INFO] Processing {len(batch)} URL(s) this run\n")
 
     if not batch:
@@ -401,19 +535,20 @@ def main():
 
         if entry:
             target = save_entry_to_file(url, entry)
-            mark_processed(url)           # ✓ save to already_processed_urls_list.txt
+            mark_processed(url)
             ok += 1
             print(f"  → Saved to {target}")
         else:
-            # error already logged inside extract_one via mark_error()
-            errors += 1
+            errors += 1   # error already logged via mark_error() inside extract_one
 
     print(f"\n{'='*55}")
-    print(f"Batch limit   : {limit_label}")
-    print(f"Processed     : {ok} succeeded  |  {errors} failed")
-    print(f"Output files  : {all_output_files()}")
-    print(f"Processed log : {PROCESSED_FILE}")
-    print(f"Error log     : {ERROR_FILE}")
+    print(f"Batch limit    : {limit_label}")
+    print(f"Succeeded      : {ok}")
+    print(f"Failed         : {errors}")
+    print(f"JSON files     : {all_json_files()}")
+    print(f"Input files    : {_txt_files(INPUT_BASE)}")
+    print(f"Processed files: {_txt_files(PROCESSED_BASE)}")
+    print(f"Error log      : {ERROR_FILE}")
     sys.exit(0 if errors == 0 else 1)
 
 
