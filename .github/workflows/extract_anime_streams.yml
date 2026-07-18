@@ -2,8 +2,24 @@ name: Extract Stream URLs
 
 on:
   workflow_dispatch:
+    inputs:
+      batch_limit:
+        description: "How many URLs to process this run"
+        required: false
+        default: "100"
+        type: choice
+        options:
+          - "2"
+          - "20"
+          - "50"
+          - "100"
+          - "250"
+          - "500"
+          - "1000"
+          - "5000"
+          - "full"
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */6 * * *"   # scheduled runs always use the default (100)
 
 jobs:
   extract:
@@ -25,12 +41,16 @@ jobs:
       - run: playwright install chromium && playwright install-deps chromium
 
       - name: Run extractor
-        run: python anisnatch_extract.py
+        run: |
+          # Use the chosen batch limit when triggered manually; default to 100 on schedule
+          LIMIT="${{ github.event.inputs.batch_limit || '100' }}"
+          echo "[workflow] Batch limit: $LIMIT"
+          python anisnatch_extract.py --limit "$LIMIT"
 
       - name: Commit updated files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add streams*.json already_processed_urls_list.txt
-          git diff --cached --quiet || git commit -m "update streams [$(date -u '+%Y-%m-%d %H:%M UTC')]"
+          git add streams*.json already_processed_urls_list.txt error_faced_urls_list.txt
+          git diff --cached --quiet || git commit -m "update streams [$(date -u '+%Y-%m-%d %H:%M UTC')] limit=${{ github.event.inputs.batch_limit || '100' }}"
           git push
