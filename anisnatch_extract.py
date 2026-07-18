@@ -742,24 +742,18 @@ def _extract_json_array(html: str, key: str):
 
 def extract_meta_from_iframe(page) -> dict:
     """
-    Extract skip_marks and subtitles from every available HTML source:
+    Extract skip_marks and subtitles from every available HTML source.
 
-    Search order (most to least reliable):
-      1. Main page HTML  — <script> blocks often carry skipTimes / skipMarks / skips
-      2. Active iframe content frame HTML
-      3. JS evaluation  — window.playerConfig / window.skipMarks / etc.
+    Search order:
+      1. Main page HTML
+      2. Active iframe HTML  (after waiting for it to load)
+      3. JS evaluation INSIDE the iframe frame  (most reliable — skips lives here)
+      4. JS evaluation on the main page as a last-ditch attempt
 
-    Key names searched (case-insensitive) for skip marks:
-        skipTimes, skipMarks, skip_marks, skips, introOutro,
-        intro_outro, chapters, cuePoints
-
-    Key names searched for subtitles:
-        subtitles, tracks, captions, textTracks
-
-    The result key is always  "skip_marks"  (never "skips").
+    The result key is always "skip_marks" (never "skips").
     """
-    result   = {}
-    sources  = []   # list of (label, html_string) to search
+    result  = {}
+    sources = []   # list of (label, html_string) to search
 
     # ── Source 1: main page HTML ──────────────────────────────────
     try:
@@ -767,70 +761,85 @@ def extract_meta_from_iframe(page) -> dict:
     except Exception as e:
         print(f"  [META] Could not read main page HTML: {e}")
 
-    # ── Source 2: active iframe content frame ─────────────────────
+    # ── Source 2 + 3: iframe HTML and JS eval INSIDE the frame ───
+    # The player page (anisnatch.to/video/def/...) sets JS variables like
+    #   skips = [{label:'Intro',start:0,end:90}, ...]
+    # inside its own <script> block.  We must evaluate these expressions
+    # in the iframe's JS context, not the parent page's context.
     try:
-        iframe_el = page.query_selector("iframe#video-player")
+        # Wait up to 10 s for the iframe to appear
+        page.wait_for_selector(
+            "iframe#video-player, iframe[src*='/video/']",
+            timeout=10_000,
+        )
+        iframe_el = (page.query_selector("iframe#video-player") or
+                     page.query_selector("iframe[src*='/video/']"))
         if iframe_el:
             frame = iframe_el.content_frame()
             if frame:
-                sources.append(("iframe", frame.content()))
-    except Exception as e:
-        print(f"  [META] Could not read iframe HTML: {e}")
+                # Wait for the frame's DOM to be ready
+                try:
+                    frame.wait_for_load_state("domcontentloaded", timeout=10_000)
+                except Exception:
+                    time.sleep(2)
 
-    # ── Source 3: JS evaluation of common window globals ──────────
-    js_candidates = [
-        "window.skipTimes",
-        "window.skipMarks",
-        "window.skip_marks",
-        "window.skips",
-        "window.introOutro",
-        "window.chapters",
-        "window.playerConfig && window.playerConfig.skipTimes",
-        "window.playerConfig && window.playerConfig.skips",
+                # Source 2: raw iframe HTML
+                try:
+                    iframe_html = frame.content()
+                    if iframe_html and len(iframe_html) > 200:
+                        sources.append(("iframe-html", iframe_html))
+                        print(f"  [META] Got iframe HTML ({len(iframe_html):,} bytes)")
+                    else:
+                        print("  [META] iframe HTML too small — skipping")
+                except Exception as e:
+                    print(f"  [META] Could not read iframe HTML: {e}")
+
+                # Source 3: JS eval INSIDE the iframe frame
+                # skips is a plain var in the player's <script>, not on window.*
+                # of the parent — so we MUST evaluate inside the iframe frame.
+                js_vars = [
+                    "typeof skips      !== 'undefined' ? skips      : null",
+                    "typeof skipTimes  !== 'undefined' ? skipTimes  : null",
+                    "typeof skipMarks  !== 'undefined' ? skipMarks  : null",
+                    "typeof introOutro !== 'undefined' ? introOutro : null",
+                    "typeof chapters   !== 'undefined' ? chapters   : null",
+                    "window.skips",
+                    "window.skipTimes",
+                    "window.skipMarks",
+                    "window.playerConfig && window.playerConfig.skips",
+                    "window.playerConfig && window.playerConfig.skipTimes",
+                ]
+                for expr in js_vars:
+                    try:
+                        val = frame.evaluate(
+                            f"() => {{ try {{ return {expr}; }} catch(e) {{ return null; }} }}"
+                        )
+                        if isinstance(val, list) and val:
+                            sources.append(("iframe-js", json.dumps({"skips": val})))
+                            print(f"  [META] iframe-js found skips via ({expr}): {val}")
+                            break
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"  [META] iframe access failed: {e}")
+
+    # ── Source 4: JS eval on main page (last resort) ─────────────
+    for expr in [
+        "typeof skips     !== 'undefined' ? skips     : null",
         "typeof skipTimes !== 'undefined' ? skipTimes : null",
         "typeof skipMarks !== 'undefined' ? skipMarks : null",
-        "typeof skips     !== 'undefined' ? skips     : null",
-        "typeof introOutro !== 'undefined' ? introOutro : null",
-        "typeof chapters   !== 'undefined' ? chapters   : null",
-    ]
-    for expr in js_candidates:
+        "window.skips", "window.skipTimes", "window.skipMarks",
+    ]:
         try:
-            val = page.evaluate(f"() => {{ try {{ return {expr}; }} catch(e) {{ return null; }} }}")
+            val = page.evaluate(
+                f"() => {{ try {{ return {expr}; }} catch(e) {{ return null; }} }}"
+            )
             if isinstance(val, list) and val:
-                # wrap in a labelled key so _extract_json_array can find it
-                sources.append((f"js:{expr}", json.dumps({"skips": val})))
+                sources.append(("main-js", json.dumps({"skips": val})))
+                print(f"  [META] main-js found skips via ({expr}): {val}")
                 break
         except Exception:
             pass
-
-    # ── Source 4: active iframe fetched directly via requests ─────
-    # The working single-episode script proved that the player page HTML
-    # contains  skips: [...]  in a <script> block.  Playwright's iframe
-    # content_frame() sometimes returns empty; fetching the src directly
-    # is a reliable fallback.
-    try:
-        iframe_el = page.query_selector("iframe#video-player, iframe[src*='/video/']")
-        if iframe_el:
-            iframe_src = iframe_el.get_attribute("src") or ""
-            if iframe_src:
-                if not iframe_src.startswith("http"):
-                    iframe_src = BASE_URL + iframe_src
-                import requests as _req
-                _hdrs = {
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/150.0.0.0 Safari/537.36"
-                    ),
-                    "Referer": BASE_URL + "/",
-                }
-                _cookies = {c["name"]: c["value"] for c in page.context.cookies()}
-                _r = _req.get(iframe_src, headers=_hdrs, cookies=_cookies, timeout=20)
-                if _r.status_code == 200:
-                    sources.append(("iframe-fetch", _r.text))
-                    print(f"  [META] Fetched iframe HTML directly ({len(_r.text):,} bytes)")
-    except Exception as e:
-        print(f"  [META] Direct iframe fetch failed: {e}")
 
     # ── Skip-mark key aliases to search (in priority order) ───────
     SKIP_KEYS     = ["skips", "skipTimes", "skipMarks", "skip_marks",
