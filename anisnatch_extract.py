@@ -4,7 +4,6 @@ anisnatch_extract.py — Stream URL Extractor for anisnatch.top
 - Skips already-done URLs in: already_processed_urls_list.txt
 - Logs failed URLs to:        error_faced_urls_list.txt
 - Writes output to:           streams.json, streams_2.json … (auto-splits at 3 MB)
-- Extracts DUB streams only.
 - Batch size controlled by CLI arg: python anisnatch_extract.py --limit 100
 """
 
@@ -228,43 +227,19 @@ def extract_stream_data(html, iframe_src=""):
     return result
 
 
-def find_dub_iframe(page):
+def find_iframe(page):
     frame      = None
     iframe_src = ""
 
     try:
-        dub_btn = (
-            page.query_selector('text=DUB') or
-            page.query_selector('[data-type="dub"]') or
-            page.query_selector('.dub-btn') or
-            page.query_selector('button:has-text("DUB")') or
-            page.query_selector('a:has-text("DUB")')
-        )
-        if dub_btn:
-            print("  [DUB] Found DUB tab — clicking...")
-            dub_btn.click()
-            time.sleep(2)
-    except Exception as e:
-        print(f"  [DUB] Tab click skipped: {e}")
-
-    try:
-        for el in page.query_selector_all('iframe'):
+        el = page.wait_for_selector('iframe[src*="/video/def/"]', timeout=45_000)
+        if el:
             src = el.get_attribute("src") or ""
-            if "dub" in src.lower():
-                iframe_src = src if src.startswith("http") else "https://anisnatch.top" + src
-                frame = el.content_frame()
-                print(f"  [DUB] Matched dub iframe: {iframe_src}")
-                break
-
-        if not frame:
-            el = page.query_selector('iframe[src*="/video/def/"]')
-            if el:
-                src = el.get_attribute("src") or ""
-                iframe_src = src if src.startswith("http") else "https://anisnatch.top" + src
-                frame = el.content_frame()
-                print(f"  [DUB] Using default iframe (post-click): {iframe_src}")
+            iframe_src = src if src.startswith("http") else "https://anisnatch.top" + src
+            frame = el.content_frame()
+            print(f"  [iframe] Found: {iframe_src}")
     except Exception as e:
-        print(f"  [DUB] iframe search error: {e}")
+        print(f"  [iframe] Not found: {e}")
 
     return frame, iframe_src
 
@@ -302,10 +277,10 @@ def extract_one(watch_url, serial):
             mark_error(watch_url, error_reason)
             return None
 
-        frame, iframe_src = find_dub_iframe(page)
+        frame, iframe_src = find_iframe(page)
 
         if not frame:
-            error_reason = "DUB iframe not found"
+            error_reason = "iframe not found"
             print(f"  [ERROR] {error_reason} — skipping")
             browser.close()
             mark_error(watch_url, error_reason)
@@ -323,7 +298,7 @@ def extract_one(watch_url, serial):
 
     data = extract_stream_data(html, iframe_src=iframe_src)
     if not any(k.startswith("stream_url_") for k in data):
-        error_reason = "No stream URL found in DUB iframe"
+        error_reason = "No stream URL found in iframe"
         print(f"  [ERROR] {error_reason}")
         mark_error(watch_url, error_reason)
         return None
@@ -338,7 +313,7 @@ def extract_one(watch_url, serial):
     entry.update(data)
 
     n = sum(1 for k in entry if k.startswith("stream_url_"))
-    print(f"  ✓ serial={serial}  {n} DUB stream(s) found")
+    print(f"  ✓ serial={serial}  {n} stream(s) found")
     for i in range(1, n + 1):
         print(f"    stream_url_{i}: {entry.get(f'stream_url_{i}', '')}")
 
