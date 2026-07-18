@@ -1,0 +1,11 @@
+# anisnatch.top Watch URLs
+# One URL per line. Lines starting with # are ignored.
+# This file is read by the GitHub Action and by the extractor script.
+#
+# FORMAT: https://anisnatch.top/watch/ANIME_ID?ep=EPISODE_NUMBER
+#
+# ── Add your URLs below ───────────────────────────────────────────
+
+https://anisnatch.top/watch/1735?ep=250
+# https://anisnatch.top/watch/1735?ep=251
+# https://anisnatch.top/watch/999?ep=1
