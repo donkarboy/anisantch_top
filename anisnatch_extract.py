@@ -172,22 +172,62 @@ def ensure_dub_selected(page):
             print("  [DUB] DUB already active (data-value=dub on #serverType)")
             return True
 
+    # Dismiss the partPlayer overlay if present (it blocks all clicks)
+    # Clicking it once collapses it without triggering navigation
+    try:
+        overlay = page.query_selector("div.partPlayer")
+        if overlay:
+            page.evaluate("() => { const el = document.querySelector('div.partPlayer'); if (el) el.style.pointerEvents = 'none'; }")
+            print("  [DUB] Disabled partPlayer overlay via JS")
+    except Exception:
+        pass
+
+    # Open the serverTypeMenu dropdown if it's not already open
+    try:
+        server_type_btn = page.query_selector("#serverType")
+        if server_type_btn:
+            page.evaluate("() => { const btn = document.querySelector('#serverType'); if (btn) btn.click(); }")
+            time.sleep(0.5)
+    except Exception:
+        pass
+
     # Check if a DUB option even exists
     dub_item = page.query_selector('#serverTypeMenu .dropdown-item[data-type="dub"]')
     if not dub_item:
         print("  [DUB] No [data-type='dub'] item in #serverTypeMenu — no dub for this episode")
         return False
 
-    # Click it
+    # Click it — the page has a .partPlayer overlay that intercepts pointer events,
+    # so we must bypass it with a JS dispatchEvent instead of a real mouse click.
     try:
         print("  [DUB] Clicking [data-type='dub'] in #serverTypeMenu …")
-        dub_item.scroll_into_view_if_needed()
-        dub_item.click()
+
+        # Strategy 1: JS click (bypasses any overlay completely)
+        clicked = page.evaluate("""
+            () => {
+                const item = document.querySelector('#serverTypeMenu .dropdown-item[data-type="dub"]');
+                if (!item) return false;
+                item.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                return true;
+            }
+        """)
+
+        if not clicked:
+            print("  [DUB] JS click returned false — element gone after query")
+            return False
+
         # Wait for #streamTypeMenu to repopulate with dub servers
         time.sleep(2.5)
+
     except Exception as e:
-        print(f"  [DUB] Click failed: {e}")
-        return False
+        # Strategy 2: Playwright force click (skips actionability checks / overlay)
+        try:
+            print(f"  [DUB] JS click failed ({e}), trying force click …")
+            dub_item.click(force=True)
+            time.sleep(2.5)
+        except Exception as e2:
+            print(f"  [DUB] Click failed: {e2}")
+            return False
 
     # Confirm dub is now active
     server_type_btn = page.query_selector("#serverType")
