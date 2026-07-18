@@ -143,12 +143,6 @@ def _decode_allanime_def(hex_token: str) -> dict:
 
     media_id = result["media_id"]
     if media_id:
-        # ── Per-quality direct MP4s (static.wixstatic.com) ────────
-        for q in result["qualities"]:
-            result["stream_urls"].append(
-                f"https://static.wixstatic.com/videos/{media_id}/mp4/{media_id},{q}.mp4"
-            )
-
         # ── Wix repackager HLS URLs ────────────────────────────────
         # Sort qualities numerically (480p < 720p < 1080p …)
         def _qsort(q):
@@ -732,8 +726,6 @@ def extract_one(watch_url: str, serial: int) -> dict | None:
                 print(f"    m3u8_master:{decoded['m3u8_url']}")
             for u in decoded.get("m3u8_urls", []):
                 print(f"    m3u8_qual:  {u}")
-            for u in decoded["stream_urls"]:
-                print(f"    mp4:        {u}")
         elif stype == "vibeplayer":
             print(f"    player_url: {decoded.get('extra', {}).get('player_url', '')}")
         elif stype == "ok":
