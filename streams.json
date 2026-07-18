@@ -1,13 +1,13 @@
 {
   "https://anisnatch.top/watch/1735?ep=250": {
-    "url": "https://anisnatch.top/watch/1735?ep=250",
     "title": "Naruto: Shippuuden - AniSnatch",
+    "url": "https://anisnatch.top/watch/1735?ep=250",
+    "iframe_url": "https://anisnatch.top/video/def/7d2473746a243c2460366462343659343f623430333e643631673e3264303f64353067303264356734343664353365267a263332633e6463363f6763623f33643e3f376264323264333f35313e6231346331267a266b63626f672960366462343659343f623430333e643631673e3264303f6435306730326435673434366435336560363637286c7661267a262a37363e36762a313436762a323e36762a242a2475727463676b63744f62243c24516f7e242a2462677263243c24343634302b36312b373e5236353c33313c3636283636365c242a2472746768756a67726f6968527f7663243c24757364242a246d637f243c2463762b704252554c4e55765f68746d5c684770415934333659757364247b/1735-250-1~2~3~4~5-bn",
     "stream_url_1": "https://repackager.wixmp.com/video.wixstatic.com/video/f0bd20_29d2658b07a84b69b36a64b3a220b35c/,1080p,720p,480p,/mp4/file.mp4.urlset/master.m3u8",
-    "found_streams": 1,
-    "episode": "250",
-    "mal_id": "1735",
-    "site_name": "def",
-    "thumbnails": "https://thumbnails.p1y.top/1735-250",
+    "stream_url_2": "https://repackager.wixmp.com/video.wixstatic.com/video/f0bd20_29d2658b07a84b69b36a64b3a220b35c/,1080p/mp4/file.mp4.urlset/master.m3u8",
+    "stream_url_3": "https://repackager.wixmp.com/video.wixstatic.com/video/f0bd20_29d2658b07a84b69b36a64b3a220b35c/,720p/mp4/file.mp4.urlset/master.m3u8",
+    "stream_url_4": "https://repackager.wixmp.com/video.wixstatic.com/video/f0bd20_29d2658b07a84b69b36a64b3a220b35c/,480p/mp4/file.mp4.urlset/master.m3u8",
+    "mal_id": "1735/250",
     "skips": [
       {
         "label": "Intro",
