@@ -1,5 +1,6 @@
 """
 anisnatch_extract.py — Stream URL Extractor for anisnatch.top
+Extracts DUB streams only (skips SUB iframe).
 """
 
 import re
@@ -43,7 +44,6 @@ def extract_stream_data(html, iframe_src=""):
             stream_urls.append(u)
 
     # 3) Expand multi-quality master URL into per-quality variants
-    #    e.g. master contains ,1080p,720p,480p, → also add individual quality URLs
     expanded = []
     for u in stream_urls:
         expanded.append(u)
@@ -98,12 +98,64 @@ def extract_stream_data(html, iframe_src=""):
     return result
 
 
-def extract_one(watch_url):
+def find_dub_iframe(page):
+    """
+    Looks for the DUB iframe specifically.
+    AniSnatch typically has two iframes: one for SUB (/video/def/...) and one for DUB.
+    We detect DUB by:
+      1) A tab/button labelled 'DUB' that switches the iframe src, OR
+      2) An iframe whose src contains 'dub' in the path, OR
+      3) Clicking the DUB tab and reading the updated iframe src.
+    Returns (frame, iframe_src) or (None, "").
+    """
+    iframe_src = ""
+    frame = None
+
+    # Try clicking the DUB tab/button if present
+    try:
+        dub_btn = page.query_selector('text=DUB') or \
+                  page.query_selector('[data-type="dub"]') or \
+                  page.query_selector('.dub-btn') or \
+                  page.query_selector('button:has-text("DUB")') or \
+                  page.query_selector('a:has-text("DUB")')
+        if dub_btn:
+            print("  [DUB] Found DUB tab — clicking it...")
+            dub_btn.click()
+            time.sleep(2)  # wait for iframe src to update
+    except Exception as e:
+        print(f"  [DUB] No DUB tab click: {e}")
+
+    # Now find the iframe — prefer one whose src hints at 'dub'
+    try:
+        all_iframes = page.query_selector_all('iframe')
+        for el in all_iframes:
+            src = el.get_attribute("src") or ""
+            if "dub" in src.lower():
+                iframe_src = src if src.startswith("http") else "https://anisnatch.top" + src
+                frame = el.content_frame()
+                print(f"  [DUB] Matched dub iframe by src: {iframe_src}")
+                break
+
+        # Fallback: use the standard /video/def/ iframe (same one for dub after tab click)
+        if not frame:
+            el = page.query_selector('iframe[src*="/video/def/"]')
+            if el:
+                src = el.get_attribute("src") or ""
+                iframe_src = src if src.startswith("http") else "https://anisnatch.top" + src
+                frame = el.content_frame()
+                print(f"  [DUB] Using default iframe (post-DUB-click): {iframe_src}")
+    except Exception as e:
+        print(f"  [DUB] iframe search error: {e}")
+
+    return frame, iframe_src
+
+
+def extract_one(watch_url, serial):
     from playwright.sync_api import sync_playwright
 
     anime_id = (re.search(r'/watch/(\d+)', watch_url) or [None, "?"])[1]
     episode  = (re.search(r'ep=(\d+)',     watch_url) or [None, "?"])[1]
-    print(f"\n→ Anime {anime_id}  Ep {episode}  |  {watch_url}")
+    print(f"\n→ [{serial}] Anime {anime_id}  Ep {episode}  |  {watch_url}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -125,23 +177,11 @@ def extract_one(watch_url):
             browser.close()
             return None
 
-        frame = None
-        iframe_src = ""
-        try:
-            el = page.wait_for_selector('iframe[src*="/video/def/"]', timeout=45_000)
-            if el:
-                raw_src = el.get_attribute("src") or ""
-                # Build full iframe URL
-                if raw_src.startswith("http"):
-                    iframe_src = raw_src
-                else:
-                    iframe_src = "https://anisnatch.top" + raw_src
-                frame = el.content_frame()
-        except Exception:
-            pass
+        # ── DUB-only: find and click DUB tab, then grab iframe ──
+        frame, iframe_src = find_dub_iframe(page)
 
         if not frame:
-            print("  [ERROR] iframe not found")
+            print("  [ERROR] DUB iframe not found — skipping")
             browser.close()
             return None
 
@@ -157,20 +197,21 @@ def extract_one(watch_url):
 
     data = extract_stream_data(html, iframe_src=iframe_src)
     if not any(k.startswith("stream_url_") for k in data):
-        print("  [ERROR] No stream URL found")
+        print("  [ERROR] No stream URL found in DUB iframe")
         return None
 
     title = page_title.strip() if page_title and page_title.strip() else f"Anime {anime_id} – Episode {episode}"
 
-    # Final entry: title → url → iframe_url → stream_urls → mal_id → skips/subtitles
+    # Final entry key order: serial → title → url → iframe_url → streams → mal_id → skips
     entry = {
-        "title": title,
-        "url":   watch_url,
+        "serial": serial,
+        "title":  title,
+        "url":    watch_url,
     }
     entry.update(data)
 
     n = sum(1 for k in entry if k.startswith("stream_url_"))
-    print(f"  ✓ {n} stream(s) found")
+    print(f"  ✓ serial={serial}  {n} DUB stream(s) found")
     for i in range(1, n + 1):
         print(f"    stream_url_{i}: {entry.get(f'stream_url_{i}', '')}")
 
@@ -187,9 +228,20 @@ def main():
     else:
         streams = {}
 
+    # Determine next serial number based on existing entries
+    existing_serials = [v.get("serial", 0) for v in streams.values() if isinstance(v, dict)]
+    next_serial = max(existing_serials, default=0) + 1
+
     ok = 0
     for url in URLS:
-        data = extract_one(url)
+        # Assign serial: reuse existing serial if URL already in file, else increment
+        if url in streams and "serial" in streams[url]:
+            serial = streams[url]["serial"]
+        else:
+            serial = next_serial
+            next_serial += 1
+
+        data = extract_one(url, serial)
         if data:
             streams[url] = data
             ok += 1
