@@ -42,7 +42,6 @@ jobs:
 
       - name: Run extractor
         run: |
-          # Use the chosen batch limit when triggered manually; default to 100 on schedule
           LIMIT="${{ github.event.inputs.batch_limit || '100' }}"
           echo "[workflow] Batch limit: $LIMIT"
           python anisnatch_extract.py --limit "$LIMIT"
@@ -51,7 +50,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Include auto-created files even if they didn't exist before this run
-          git add streams*.json already_processed_urls_list.txt error_faced_urls_list.txt || true
+          # Stage all auto-created and auto-split files
+          git add streams*.json
+          git add inputed_urls_list*.txt
+          git add already_processed_urls_list*.txt
+          git add error_faced_urls_list.txt
           git diff --cached --quiet || git commit -m "update streams [$(date -u '+%Y-%m-%d %H:%M UTC')] limit=${{ github.event.inputs.batch_limit || '100' }}"
           git push
