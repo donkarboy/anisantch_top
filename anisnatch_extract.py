@@ -518,17 +518,127 @@ def mark_error(url: str, reason: str):
 
 
 # ══════════════════════════════════════════════════════════════════
-# SECTION 5 — INPUT URL LIST
+# SECTION 5 — INPUT URL LIST  (with range-expansion)
 # ══════════════════════════════════════════════════════════════════
 
+# Matches lines like:
+#   https://anisnatch.top/watch/20?ep=1  to  220
+#   https://anisnatch.top/watch/20?ep=1 to 220
+#   https://anisnatch.top/watch/20?ep=1to220          (no spaces)
+# The base URL must contain  ?ep=<start>  and be followed by "to <end>".
+_RANGE_RE = re.compile(
+    r'^(https?://[^\s]+\?ep=)(\d+)\s+to\s+(\d+)\s*$',
+    re.IGNORECASE,
+)
+
+
+def _expand_line(raw_line: str) -> list[str]:
+    """
+    If *raw_line* is a range shorthand  (…?ep=START  to  END)  expand it into
+    individual episode URLs and return that list.
+
+    Otherwise return a single-element list containing the original line.
+
+    Examples
+    --------
+    "https://anisnatch.top/watch/20?ep=1 to 220"
+        → ["https://anisnatch.top/watch/20?ep=1",
+           "https://anisnatch.top/watch/20?ep=2",
+           …
+           "https://anisnatch.top/watch/20?ep=220"]
+
+    "https://anisnatch.top/watch/21?ep=20  to  30"
+        → 11 individual episode URLs  (ep=20 … ep=30, inclusive)
+    """
+    m = _RANGE_RE.match(raw_line.strip())
+    if not m:
+        return [raw_line.strip()]
+
+    base_prefix = m.group(1)   # e.g. "https://anisnatch.top/watch/20?ep="
+    start       = int(m.group(2))
+    end         = int(m.group(3))
+
+    if start > end:
+        print(
+            f"  [WARN] Range start ({start}) > end ({end}) in line:\n"
+            f"         {raw_line.strip()}\n"
+            f"         → expanding in reverse order (ep={start} down to ep={end})"
+        )
+        return [f"{base_prefix}{ep}" for ep in range(start, end - 1, -1)]
+
+    return [f"{base_prefix}{ep}" for ep in range(start, end + 1)]
+
+
 def load_input_urls() -> list:
+    """
+    Read *inputed_urls_list.txt* and return a flat, ordered list of watch-URLs.
+
+    Lines may be either:
+      • a plain URL  →  used as-is
+      • a range line →  expanded to individual episode URLs
+
+    Range syntax (case-insensitive, flexible whitespace around "to"):
+        https://anisnatch.top/watch/<id>?ep=<START>  to  <END>
+
+    Mixed example file
+    ------------------
+        https://anisnatch.top/watch/1735?ep=1
+        https://anisnatch.top/watch/1735?ep=2
+        https://anisnatch.top/watch/20?ep=1 to 220
+        https://anisnatch.top/watch/1735?ep=5
+        https://anisnatch.top/watch/21?ep=20  to  30
+
+    The above yields 1 + 1 + 220 + 1 + 11 = 234 individual URLs.
+    """
     if not os.path.isfile(INPUT_FILE):
         print(f"[ERROR] Input file not found: {INPUT_FILE}")
         sys.exit(1)
+
+    raw_lines: list[str] = []
     with open(INPUT_FILE, "r", encoding="utf-8") as f:
-        urls = [line.strip() for line in f if line.strip()]
-    print(f"[INFO] {len(urls)} URL(s) in {INPUT_FILE}")
-    return urls
+        for line in f:
+            stripped = line.strip()
+            if stripped:                     # skip blank / whitespace-only lines
+                raw_lines.append(stripped)
+
+    print(f"[INFO] {len(raw_lines)} raw line(s) read from {INPUT_FILE}")
+
+    expanded: list[str] = []
+    range_count = 0
+    for raw in raw_lines:
+        chunk = _expand_line(raw)
+        if len(chunk) > 1:
+            range_count += 1
+            print(
+                f"  [RANGE] Expanded → {len(chunk)} URL(s)  "
+                f"({chunk[0]}  …  {chunk[-1]})"
+            )
+        expanded.extend(chunk)
+
+    if range_count:
+        print(
+            f"[INFO] {range_count} range line(s) expanded  →  "
+            f"{len(expanded)} total URL(s)"
+        )
+    else:
+        print(f"[INFO] {len(expanded)} URL(s) ready (no range lines detected)")
+
+    # Preserve order but deduplicate consecutive duplicates that could arise if
+    # the user accidentally lists the same plain URL and a range covering it.
+    seen:   set[str]  = set()
+    unique: list[str] = []
+    for u in expanded:
+        if u not in seen:
+            seen.add(u)
+            unique.append(u)
+
+    if len(unique) < len(expanded):
+        print(
+            f"[INFO] {len(expanded) - len(unique)} duplicate URL(s) removed  →  "
+            f"{len(unique)} unique URL(s)"
+        )
+
+    return unique
 
 
 # ══════════════════════════════════════════════════════════════════
