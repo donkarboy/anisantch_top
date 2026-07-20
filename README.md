@@ -23,3 +23,6 @@ https://megaplay.buzz/stream/s-4/8131/dub?autostart=true
 https://api.yenime.net/anime/20/3  its acutally megaplay buzz or vidwish
 
 https://vidbolt.xyz/anime/1735/250  same as megpla buzz or vidwish  from https://yenime.net/watch/20/99
+
+
+https://tryembed.us.cc/embed/anime/1735/1/dub  are related to vibesite found from this https://yenime.net/watch/20/99
