@@ -19,7 +19,7 @@ on:
           - "5000"
           - "full"
   schedule:
-    - cron: "0 */6 * * *"   # scheduled runs always use the default (100)
+    - cron: "0 */1 * * *"   # scheduled runs always use the default (100)
 
 jobs:
   extract:
