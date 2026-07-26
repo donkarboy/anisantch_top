@@ -19,7 +19,7 @@ on:
           - "5000"
           - "full"
   schedule:
-    - cron: "*/30 * * * *"   # runs every 30 minutes; uses the default batch limit (100)
+    - cron: "*/15 * * * *"   # runs every 30 minutes; uses the default batch limit (100)
 
 jobs:
   extract:
@@ -57,7 +57,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Stage all auto-created and auto-split files
           git add streams*.json
-          git add streams*.txt
           git add already_processed_urls_list.txt
           git add error_faced_urls_list.txt
           git add failed_extract_server_urls_list.txt || true
