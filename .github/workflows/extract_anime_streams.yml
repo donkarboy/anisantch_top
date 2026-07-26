@@ -52,8 +52,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Stage all auto-created and auto-split files
           git add streams*.json
-          git add inputed_urls_list*.txt
-          git add already_processed_urls_list*.txt
+          git add streams*.txt
+          git add already_processed_urls_list.txt
           git add error_faced_urls_list.txt
+          git add failed_extract_server_urls_list.txt || true
           git diff --cached --quiet || git commit -m "update streams [$(date -u '+%Y-%m-%d %H:%M UTC')] limit=${{ github.event.inputs.batch_limit || '100' }}"
           git push
