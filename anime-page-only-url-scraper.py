@@ -6,7 +6,7 @@ MODE=daily_update                            →  scrape pages 1–4, refresh on
 
 Output files:
   anime-page-only-url-scraper.json        (first chunk, always exists)
-  anime-page-only-url-scraper-part2.json  (if total > 1 MB)
+  anime-page-only-url-scraper-part2.json  (if total > 3 MB)
   anime-page-only-url-scraper-part3.json  ...and so on
 
 Each file is kept under MAX_FILE_BYTES. Records are split across files in
@@ -22,7 +22,7 @@ from playwright.async_api import async_playwright
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_URL      = "https://anisnatch.top/updated?page="
 OUTPUT_BASE   = "anime-page-only-url-scraper"   # no .json — added below
-MAX_FILE_BYTES = 1 * 1024 * 1024                 # 1 MB per file
+MAX_FILE_BYTES = 3 * 1024 * 1024                 # 3 MB per file
 
 # ⚠️  Replace this value whenever the cookie expires (every 1-2 days).
 CF_CLEARANCE = (
