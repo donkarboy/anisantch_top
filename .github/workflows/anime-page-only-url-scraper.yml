@@ -1,4 +1,4 @@
-name: AniSnatch Scraper
+name: AniSnatch page urls list Scraper
 
 on:
   schedule:
@@ -68,17 +68,19 @@ jobs:
           fi
 
       - name: Run scraper
-        run: python anime-page-only-url-scraper.py
+        run: python scraper.py
 
       - name: Commit and push results
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Set the remote URL with the token embedded so push is authorised
+          # Token-authenticated remote so push is authorised
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
 
-          git add urls_list.json
+          # Stage all part files (new, modified, or deleted)
+          git add anime-page-only-url-scraper*.json
+
           git diff --cached --quiet && echo "No changes to commit" && exit 0
 
           if [ "$MODE" = "daily_update" ]; then
