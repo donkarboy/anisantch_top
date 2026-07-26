@@ -68,7 +68,7 @@ jobs:
           fi
 
       - name: Run scraper
-        run: python scraper.py
+        run: python anime-page-only-url-scraper.py
 
       - name: Commit and push results
         run: |
