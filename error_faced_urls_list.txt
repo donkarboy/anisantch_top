@@ -1,3 +1,6 @@
 # error_faced_urls_list.txt
 # Auto-managed — format: [YYYY-MM-DD HH:MM UTC]  <url>  |  <reason>
 # Do NOT edit manually.
+[2026-07-26 10:54 UTC]  https://anisnatch.top/watch/121?ep=52  |  No DUB or SUB available
+[2026-07-26 10:55 UTC]  https://anisnatch.top/watch/121?ep=53  |  No DUB or SUB available
+[2026-07-26 10:55 UTC]  https://anisnatch.top/watch/121?ep=54  |  No DUB or SUB available
