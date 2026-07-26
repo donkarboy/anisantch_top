@@ -1,7 +1,12 @@
 """
 anisnatch_extract.py — Stream URL Extractor for anisnatch.to
 ─────────────────────────────────────────────────────────────
-- Reads input URLs from:      inputed_urls_list.txt
+- Reads input URLs from:      inputed_urls_list.txt  AND/OR
+                              a remote JSON catalogue (JSON_CATALOGUE_URL)
+  JSON status → URL field rules:
+    "aired"    → "aired_url"
+    "ongoing"  → "aired_url"
+    "complete" → "url"
 - Skips already-done URLs in: already_processed_urls_list.txt
 - Logs failed URLs to:        error_faced_urls_list.txt
                               failed_extract_server_urls_list.txt
@@ -56,6 +61,8 @@ import base64
 import argparse
 from datetime import datetime, timezone
 from urllib.parse import urljoin
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
 # ══════════════════════════════════════════════════════════════════
 # No GitHub token needed here.
@@ -74,6 +81,14 @@ OUTPUT_EXT_TXT  = ".txt"
 MAX_FILE_BYTES  = 3 * 1024 * 1024   # 3 MB per split file
 BASE_URL        = "https://anisnatch.to"
 IFRAME_BASE     = "https://anisnatch.to/video/"
+
+# ── JSON CATALOGUE SOURCE ─────────────────────────────────────────
+# Remote JSON file listing anime entries.
+# Set to "" or None to disable; the script will then only use INPUT_FILE.
+JSON_CATALOGUE_URL = (
+    "https://raw.githubusercontent.com/donkarboy/anisantch_top"
+    "/refs/heads/main/anime-page-only-url-scraper.json"
+)
 # ─────────────────────────────────────────────────────────────────
 
 
@@ -359,12 +374,14 @@ def mark_failed_url(url: str):
 
 
 # ══════════════════════════════════════════════════════════════════
-# SECTION 5 — INPUT URL LIST  (with range-expansion)
+# SECTION 5 — INPUT URL LIST  (txt file + remote JSON catalogue)
 # ══════════════════════════════════════════════════════════════════
 
 _RANGE_RE = re.compile(r'^(https?://[^\s]+\?ep=)(\d+)\s+to\s+(\d+)\s*$', re.IGNORECASE)
 
+
 def _expand_line(raw_line: str) -> list[str]:
+    """Expand  '…?ep=1 to 12'  into 12 individual episode URLs."""
     m = _RANGE_RE.match(raw_line.strip())
     if not m:
         return [raw_line.strip()]
@@ -375,9 +392,12 @@ def _expand_line(raw_line: str) -> list[str]:
         return [f"{base_prefix}{ep}" for ep in range(start, end - 1, -1)]
     return [f"{base_prefix}{ep}" for ep in range(start, end + 1)]
 
-def load_input_urls() -> list:
+
+def _urls_from_txt() -> list[str]:
+    """Load + range-expand URLs from the local txt input file."""
     if not os.path.isfile(INPUT_FILE):
-        print(f"[ERROR] Input file not found: {INPUT_FILE}"); sys.exit(1)
+        print(f"[INFO] {INPUT_FILE} not found — skipping txt source")
+        return []
     raw_lines = [l.strip() for l in open(INPUT_FILE, encoding="utf-8") if l.strip()]
     print(f"[INFO] {len(raw_lines)} raw line(s) read from {INPUT_FILE}")
     expanded, range_count = [], 0
@@ -388,13 +408,103 @@ def load_input_urls() -> list:
             print(f"  [RANGE] Expanded → {len(chunk)} URL(s)  ({chunk[0]}  …  {chunk[-1]})")
         expanded.extend(chunk)
     if range_count:
-        print(f"[INFO] {range_count} range(s) expanded → {len(expanded)} total URL(s)")
+        print(f"[INFO] {range_count} range(s) expanded → {len(expanded)} total URL(s) from txt")
+    return expanded
+
+
+def _urls_from_json_catalogue() -> list[str]:
+    """
+    Fetch the remote JSON catalogue and extract episode URLs according to status:
+      "aired"    → entry["aired_url"]   (range-expanded)
+      "ongoing"  → entry["aired_url"]   (range-expanded)
+      "complete" → entry["url"]         (range-expanded)
+    Entries missing the expected field are warned and skipped.
+    """
+    if not JSON_CATALOGUE_URL:
+        return []
+
+    print(f"[INFO] Fetching JSON catalogue: {JSON_CATALOGUE_URL}")
+    try:
+        req  = Request(JSON_CATALOGUE_URL, headers={"User-Agent": "anisnatch-extractor/1.0"})
+        with urlopen(req, timeout=30) as resp:
+            raw  = resp.read().decode("utf-8")
+            data = json.loads(raw)
+    except URLError as e:
+        print(f"[WARN] Could not fetch JSON catalogue: {e}"); return []
+    except json.JSONDecodeError as e:
+        print(f"[WARN] JSON catalogue is not valid JSON: {e}"); return []
+
+    if not isinstance(data, list):
+        print("[WARN] JSON catalogue root is not a list — skipping"); return []
+
+    print(f"[INFO] JSON catalogue: {len(data)} entries")
+
+    expanded = []
+    skipped  = 0
+    for entry in data:
+        if not isinstance(entry, dict):
+            skipped += 1; continue
+
+        status = (entry.get("status") or "").strip().lower()
+
+        if status in ("aired", "ongoing"):
+            raw_url = entry.get("aired_url", "")
+        elif status == "complete":
+            raw_url = entry.get("url", "")
+        else:
+            # Unknown / missing status — try aired_url first, then url
+            raw_url = entry.get("aired_url") or entry.get("url", "")
+            if raw_url:
+                print(f"  [WARN] Unknown status '{status}' for anime_id="
+                      f"{entry.get('anime_id','?')} — using '{raw_url}'")
+            else:
+                print(f"  [WARN] No usable URL for anime_id={entry.get('anime_id','?')} "
+                      f"(status='{status}') — skipping")
+                skipped += 1; continue
+
+        if not raw_url:
+            name = entry.get("anime_name", entry.get("anime_id", "?"))
+            print(f"  [WARN] '{status}' entry has no URL for '{name}' — skipping")
+            skipped += 1; continue
+
+        # Range-expand the URL (handles "?ep=1 to 12" syntax)
+        chunk = _expand_line(raw_url.strip())
+        if len(chunk) > 1:
+            print(f"  [RANGE JSON] {entry.get('anime_name','?')} → {len(chunk)} ep(s)"
+                  f"  ({chunk[0]}  …  {chunk[-1]})")
+        expanded.extend(chunk)
+
+    print(f"[INFO] JSON catalogue produced {len(expanded)} URL(s) "
+          f"({skipped} entries skipped)")
+    return expanded
+
+
+def load_input_urls() -> list:
+    """
+    Merge URLs from:
+      1. inputed_urls_list.txt  (local, range-expanded)
+      2. Remote JSON catalogue  (fetched, range-expanded, status-routed)
+    Deduplicate while preserving order (txt URLs come first).
+    """
+    txt_urls  = _urls_from_txt()
+    json_urls = _urls_from_json_catalogue()
+
+    combined = txt_urls + json_urls
     seen, unique = set(), []
-    for u in expanded:
+    for u in combined:
         if u not in seen:
             seen.add(u); unique.append(u)
-    if len(unique) < len(expanded):
-        print(f"[INFO] {len(expanded) - len(unique)} duplicate(s) removed → {len(unique)} unique")
+
+    dupes = len(combined) - len(unique)
+    if dupes:
+        print(f"[INFO] {dupes} duplicate(s) removed across both sources → {len(unique)} unique")
+    else:
+        print(f"[INFO] {len(unique)} unique URL(s) across both sources")
+
+    if not unique:
+        print(f"[ERROR] No input URLs found from any source.")
+        sys.exit(1)
+
     return unique
 
 
