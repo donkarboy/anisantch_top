@@ -78,7 +78,7 @@ jobs:
       - name: Run scraper
         env:
           CF_CLEARANCE: ${{ secrets.CF_CLEARANCE }}
-        run: python scraper.py
+        run: python anime-page-only-url-scraper.py
 
       # ── 6. Commit & push urls_list.json ──────────────────────────────────
       - name: Commit results
