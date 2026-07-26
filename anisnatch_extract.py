@@ -11,8 +11,7 @@ anisnatch_extract.py — Stream URL Extractor for anisnatch.to
 - Logs failed URLs to:        error_faced_urls_list.txt
                               failed_extract_server_urls_list.txt
 - Writes output locally to:   streams.json, streams_2.json … (auto-splits at 3 MB)
-                              streams.txt, streams_2.txt  … (plain URL list, mirrored)
-- Pushes both .json + .txt to a GitHub Repository after each batch.
+- Pushes .json files to a GitHub Repository after each batch.
 - Extracts DUB streams; falls back to SUB if DUB is unavailable.
 - Batch size controlled by CLI arg: python anisnatch_extract.py --limit 100
 
@@ -46,7 +45,7 @@ anisnatch_extract.py — Stream URL Extractor for anisnatch.to
   ────────────────────────────────────────────────────
       python anisnatch_extract.py --limit 100
 
-  The script will push streams.json + streams.txt (and any split files) to
+  The script will push streams.json (and any split files) to
   the root of that repo after every batch, overwriting old versions.
 ════════════════════════════════════════════════════════
 """
@@ -77,7 +76,6 @@ ERROR_FILE      = "error_faced_urls_list.txt"
 FAILED_URL_FILE = "failed_extract_server_urls_list.txt"
 OUTPUT_BASE     = "streams"
 OUTPUT_EXT_JSON = ".json"
-OUTPUT_EXT_TXT  = ".txt"
 MAX_FILE_BYTES  = 3 * 1024 * 1024   # 3 MB per split file
 BASE_URL        = "https://anisnatch.to"
 IFRAME_BASE     = "https://anisnatch.to/video/"
@@ -241,7 +239,7 @@ def build_flat_entry(serial, title, watch_url, anime_id, episode, servers, strea
 
 
 # ══════════════════════════════════════════════════════════════════
-# SECTION 3 — SPLIT-FILE MANAGEMENT  (.json + mirrored .txt)
+# SECTION 3 — SPLIT-FILE MANAGEMENT  (.json only)
 # ══════════════════════════════════════════════════════════════════
 
 def _all_json_files():
@@ -254,11 +252,8 @@ def _all_json_files():
     return base + numbered
 
 def all_output_files():
-    """Return all local output files (json + txt), for reporting."""
-    json_files = _all_json_files()
-    txt_files  = [f.replace(OUTPUT_EXT_JSON, OUTPUT_EXT_TXT) for f in json_files
-                  if os.path.isfile(f.replace(OUTPUT_EXT_JSON, OUTPUT_EXT_TXT))]
-    return json_files + txt_files
+    """Return all local output json files, for reporting."""
+    return _all_json_files()
 
 
 def load_all_streams():
@@ -286,32 +281,7 @@ def _current_write_target_json():
     return last
 
 
-def _txt_path_for(json_path: str) -> str:
-    return json_path.replace(OUTPUT_EXT_JSON, OUTPUT_EXT_TXT)
 
-
-def _rebuild_txt_for(json_path: str):
-    """
-    Re-write the .txt mirror for a given .json file.
-    Each line = one watch URL from that file's entries.
-    Format:  <url>  |  <mal_id_with_ep_and_stream_type>  |  <title>
-    """
-    txt_path = _txt_path_for(json_path)
-    try:
-        with open(json_path, "r", encoding="utf-8") as fh:
-            entries = json.load(fh)
-        if not isinstance(entries, list):
-            return
-        lines = []
-        for e in entries:
-            url   = e.get("url", "")
-            mid   = e.get("mal_id_with_ep_and_stream_type", "")
-            title = e.get("title", "")
-            lines.append(f"{url}  |  {mid}  |  {title}")
-        with open(txt_path, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(lines) + "\n")
-    except Exception as ex:
-        print(f"  [TXT] Could not write {txt_path}: {ex}")
 
 
 def save_entry_to_file(url: str, entry: dict) -> str:
@@ -334,7 +304,6 @@ def save_entry_to_file(url: str, entry: dict) -> str:
         bucket.pop()
         with open(target, "w", encoding="utf-8") as f:
             json.dump(bucket, f, indent=2, ensure_ascii=False)
-        _rebuild_txt_for(target)
 
         m      = re.search(r'_(\d+)\.json$', target)
         idx    = int(m.group(1)) + 1 if m else 2
@@ -345,7 +314,6 @@ def save_entry_to_file(url: str, entry: dict) -> str:
     with open(target, "w", encoding="utf-8") as f:
         f.write(serialised)
 
-    _rebuild_txt_for(target)   # keep .txt in sync
     return target
 
 
@@ -738,7 +706,7 @@ def main():
             target = save_entry_to_file(url, entry)
             mark_processed(url)
             ok += 1
-            print(f"  → Saved to {target}  +  {_txt_path_for(target)}")
+            print(f"  → Saved to {target}")
         else:
             errors += 1
 
