@@ -22,7 +22,7 @@ from playwright.async_api import async_playwright
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_URL      = "https://anisnatch.top/updated?page="
 OUTPUT_BASE   = "anime-page-only-url-scraper"   # no .json — added below
-MAX_FILE_BYTES = 1 * 1024 * 1024                 # 1 MB per file
+MAX_FILE_BYTES = 3 * 1024 * 1024                 # 1 MB per file
 
 # ⚠️  Replace this value whenever the cookie expires (every 1-2 days).
 CF_CLEARANCE = (
