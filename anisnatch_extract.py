@@ -1,424 +1,724 @@
 """
-AniSnatch scraper — GitHub Actions edition
-==========================================
-MODE=full_range   PAGE_START=N  PAGE_END=M  →  scrape pages N–M, merge into JSON files
-MODE=daily_update                            →  scrape pages 1–4, refresh ongoing/aired entries
+anisnatch_extract.py — Stream URL Extractor for anisnatch.to
+─────────────────────────────────────────────────────────────
+- Reads input URLs from:      inputed_urls_list.txt  AND/OR
+                              a remote JSON catalogue (JSON_CATALOGUE_URL)
+  JSON status → URL field rules:
+    "aired"    → "aired_url"
+    "ongoing"  → "aired_url"
+    "complete" → "url"
+- Skips already-done URLs in: already_processed_urls_list.txt
+- Logs failed URLs to:        error_faced_urls_list.txt
+                              failed_extract_server_urls_list.txt
+- Writes output locally to:   streams.json, streams_2.json … (auto-splits at 3 MB)
+- Pushes .json files to a GitHub Repository after each batch.
+- Extracts DUB streams; falls back to SUB if DUB is unavailable.
+- Batch size controlled by CLI arg: python anisnatch_extract.py --limit 100
 
-Output files:
-  anime-page-only-url-scraper.json        (first chunk, always exists)
-  anime-page-only-url-scraper-part2.json  (if total > 3 MB)
-  anime-page-only-url-scraper-part3.json  ...and so on
+════════════════════════════════════════════════════════
+  GITHUB REPO SETUP  (one-time, do this before first run)
+════════════════════════════════════════════════════════
 
-Each file is kept under MAX_FILE_BYTES. Records are split across files in
-serial_no order; serial_no is global and continuous across all parts.
+  Step 1 — Create a Personal Access Token (Classic)
+  ──────────────────────────────────────────────────
+  1. Go to  https://github.com/settings/tokens
+  2. Click  "Generate new token"  →  "Generate new token (classic)"
+  3. Give it a note, e.g. "anisnatch-push"
+  4. Set Expiration to whatever you want (90 days / no expiry)
+  5. Under Scopes tick:  ✅ repo  (full control of private repositories)
+  6. Click  "Generate token"
+  7. COPY the token immediately (you only see it once).
+     It looks like:  ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  8. Paste it as GITHUB_TOKEN below.
+
+  Step 2 — Create the target repository
+  ──────────────────────────────────────
+  1. Go to  https://github.com/new
+  2. Name it e.g.  "anisnatch-streams"
+  3. Set it Private (or Public — your choice)
+  4. ✅ tick "Add a README file"  (so the repo is initialised and has a main branch)
+  5. Click  "Create repository"
+  6. Copy the repo name (owner/repo) and paste as GITHUB_REPO below.
+     Example:  "myusername/anisnatch-streams"
+
+  Step 3 — Fill in the two constants below, then run:
+  ────────────────────────────────────────────────────
+      python anisnatch_extract.py --limit 100
+
+  The script will push streams.json (and any split files) to
+  the root of that repo after every batch, overwriting old versions.
+════════════════════════════════════════════════════════
 """
 
-import asyncio
+import re
 import json
 import os
-import re
-from playwright.async_api import async_playwright
+import sys
+import time
+import glob
+import base64
+import argparse
+from datetime import datetime, timezone
+from urllib.parse import urljoin
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
-# ── Config ────────────────────────────────────────────────────────────────────
-BASE_URL      = "https://anisnatch.top/updated?page="
-OUTPUT_BASE   = "anime-page-only-url-scraper"   # no .json — added below
-MAX_FILE_BYTES = 3 * 1024 * 1024                 # 3 MB per file
+# ══════════════════════════════════════════════════════════════════
+# No GitHub token needed here.
+# The GitHub Actions workflow (.github/workflows/*.yml) handles
+# all git commit + push automatically after the script finishes.
+# ══════════════════════════════════════════════════════════════════
 
-# ⚠️  Replace this value whenever the cookie expires (every 1-2 days).
-CF_CLEARANCE = (
-    "D._WYCCEfl8eiaDEatFPOa7ylkYoABNnm8s9Nc1xKY0-1785064175-1.2.1.1-"
-    "HmhSN8yb.lJGZyHwsKhHNElZTG4cosHNSfsvlv8qdF7ZS7CGzuXxEcbkZ9jKUm"
-    "SwSYgMbpnHvKk9wU7t93GgGoBSO1xzaHosvw0jh4vmDeBxaz2nkjkv97wg36n.Ma"
-    "zNDUtwowwu24Bw_2IhVncWK4pRmh4LG55K1VjGwRMZYj5p3R6KIG_zOq4bGhwiFA"
-    "8b4tyl00XtUWkwJjQBnGLGCRNPScjBfMrt_wlz_oTbQIrm8QQ9QdvvdQaG0kL.RH"
-    "LRWsNlyFqlpap0Hfi8RJgkI3br9O.f_TqWXcyP_NNDbmNJSzMvT1g_uvvohusrcc"
-    "QjqzxILhBgYbosrrkyr35OkCxn_vvxa4c3wyyqhLiqonk"
+# ── FILE PATHS ────────────────────────────────────────────────────
+INPUT_FILE      = "inputed_urls_list.txt"
+PROCESSED_FILE  = "already_processed_urls_list.txt"
+ERROR_FILE      = "error_faced_urls_list.txt"
+FAILED_URL_FILE = "failed_extract_server_urls_list.txt"
+OUTPUT_BASE     = "streams"
+OUTPUT_EXT_JSON = ".json"
+MAX_FILE_BYTES  = 3 * 1024 * 1024   # 3 MB per split file
+BASE_URL        = "https://anisnatch.to"
+IFRAME_BASE     = "https://anisnatch.to/video/"
+
+# ── JSON CATALOGUE SOURCE ─────────────────────────────────────────
+# Remote JSON file listing anime entries.
+# Set to "" or None to disable; the script will then only use INPUT_FILE.
+JSON_CATALOGUE_URL = (
+    "https://raw.githubusercontent.com/donkarboy/anisantch_top"
+    "/refs/heads/main/anime-page-only-url-scraper.json"
 )
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-)
-
-PAGE_DELAY       = 4      # seconds between page loads
-GOTO_TIMEOUT     = 45000  # ms
-SELECTOR_TIMEOUT = 15000  # ms
-# ─────────────────────────────────────────────────────────────────────────────
-
-ANIME_PATTERN = re.compile(r'data-href="anime/(\d+)"\s+title="([^"]+)"')
-EPS_PATTERN   = re.compile(r'class="tick-item tick-eps">([^<]+)</div>')
-# AniSnatch/AniWatch: <div class="fd-infor"><span class="fdi-item">TV</span> ...
-# type is the first fdi-item span; year is an fdi-item containing a 4-digit number
-TYPE_PATTERN  = re.compile(r'class="fdi-item">([^<]+)</span>')
-YEAR_PATTERN  = re.compile(r'class="fdi-item">\s*(\d{4})\s*</span>')
+# ─────────────────────────────────────────────────────────────────
 
 
-# ── File name helpers ─────────────────────────────────────────────────────────
-
-def part_filename(part: int) -> str:
-    """
-    part=1 → anime-page-only-url-scraper.json
-    part=2 → anime-page-only-url-scraper-part2.json
-    part=3 → anime-page-only-url-scraper-part3.json
-    """
-    if part == 1:
-        return f"{OUTPUT_BASE}.json"
-    return f"{OUTPUT_BASE}-part{part}.json"
+# (GitHub push is handled by the Actions workflow — no API code needed here)
 
 
-def all_existing_part_files() -> list[str]:
-    """Return sorted list of all part files that exist on disk."""
-    files = []
-    part = 1
-    while True:
-        fn = part_filename(part)
-        if os.path.exists(fn):
-            files.append(fn)
-            part += 1
-        else:
-            break
-    return files
+# ══════════════════════════════════════════════════════════════════
+# SECTION 1 — IFRAME URL DECODERS
+# ══════════════════════════════════════════════════════════════════
+
+def _decode_allanime_def(hex_token: str) -> dict:
+    """AllAnime /def/ — hex XOR 0x06 → JSON → Wix per-quality m3u8 URLs."""
+    result = {
+        "raw_json": {}, "media_id": "", "secondary_id": "",
+        "thumbnail": "", "qualities": [],
+        "m3u8_480": "", "m3u8_720": "", "m3u8_1080": "",
+        "streamer_id": "", "key": "", "date": "",
+    }
+    try:
+        raw_bytes = bytes.fromhex(hex_token)
+    except ValueError as e:
+        result["error"] = f"hex decode failed: {e}"; return result
+
+    xored = bytes([b ^ 0x06 for b in raw_bytes])
+    try:
+        data = json.loads(xored.decode("latin-1"))
+    except Exception as e:
+        result["error"] = f"JSON parse failed: {e}"; return result
+
+    result.update({
+        "raw_json": data, "streamer_id": data.get("streamerId", ""),
+        "key": data.get("key", ""), "date": data.get("date", ""),
+    })
+    parts = [p.strip() for p in data.get("url", "").split(" | ")]
+    if len(parts) >= 1: result["media_id"]     = parts[0]
+    if len(parts) >= 2: result["secondary_id"] = parts[1]
+    if len(parts) >= 3: result["thumbnail"]    = parts[2]
+    if len(parts) >= 4: result["qualities"]    = [q.strip() for q in parts[3].split(",") if q.strip()]
+
+    mid = result["media_id"]
+    if mid:
+        base = f"https://repackager.wixmp.com/video.wixstatic.com/video/{mid}"
+        result["m3u8_480"]  = f"{base}/,480p/mp4/file.mp4.urlset/master.m3u8"
+        result["m3u8_720"]  = f"{base}/,720p/mp4/file.mp4.urlset/master.m3u8"
+        result["m3u8_1080"] = f"{base}/,1080p/mp4/file.mp4.urlset/master.m3u8"
+    return result
 
 
-# ── Split-aware save ──────────────────────────────────────────────────────────
-
-def save_all_records(records: list[dict]):
-    """
-    Re-number serials globally, then split into ≤1 MB part files.
-    Deletes any old part files that are no longer needed.
-    """
-    # Re-number serials
-    for i, r in enumerate(records, start=1):
-        r["serial_no"] = i
-
-    # Split into chunks ≤ MAX_FILE_BYTES
-    chunks: list[list[dict]] = []
-    current_chunk: list[dict] = []
-    current_size = len("[\n]")   # empty array baseline
-
-    for record in records:
-        # Measure this record as it would appear in JSON
-        record_json = json.dumps(record, ensure_ascii=False)
-        # +2 for ",\n" separator
-        record_size = len(record_json.encode("utf-8")) + 2
-
-        if current_chunk and current_size + record_size > MAX_FILE_BYTES:
-            chunks.append(current_chunk)
-            current_chunk = []
-            current_size  = len("[\n]")
-
-        current_chunk.append(record)
-        current_size += record_size
-
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    if not chunks:
-        chunks = [[]]   # always write at least one (empty) file
-
-    # Write part files
-    for part, chunk in enumerate(chunks, start=1):
-        fn = part_filename(part)
-        with open(fn, "w", encoding="utf-8") as f:
-            json.dump(chunk, f, indent=2, ensure_ascii=False)
-        size_kb = os.path.getsize(fn) / 1024
-        print(f"  💾  {fn}  ({len(chunk)} records, {size_kb:.1f} KB)")
-
-    # Remove stale part files from a previous run that had more parts
-    stale_part = len(chunks) + 1
-    while os.path.exists(part_filename(stale_part)):
-        fn = part_filename(stale_part)
-        os.remove(fn)
-        print(f"  🗑️  removed stale file: {fn}")
-        stale_part += 1
+def _decode_vibeplayer_b64(b64_token: str) -> str:
+    """AniVibe /vibeplayer/ — base64 → vivibebe.site URL."""
+    padded = b64_token + "=" * (-len(b64_token) % 4)
+    try:
+        return base64.b64decode(padded).decode("utf-8")
+    except Exception as e:
+        return f"ERROR: {e}"
 
 
-# ── Load all existing records (across all parts) ──────────────────────────────
+def decode_iframe_url(iframe_url: str) -> dict:
+    """Master decoder for any https://anisnatch.to/video/* iframe URL."""
+    result = {"server_type": "", "token": "", "ep_suffix": "",
+               "iframe_url": iframe_url, "extra": {}}
 
-def load_existing() -> dict[str, dict]:
-    """Load all part files → dict keyed by anime_id."""
-    all_records: dict[str, dict] = {}
-    for fn in all_existing_part_files():
-        with open(fn, encoding="utf-8") as f:
-            records = json.load(f)
-        for r in records:
-            if "anime_id" in r:
-                all_records[r["anime_id"]] = r
-    return all_records
+    if not iframe_url.startswith(IFRAME_BASE):
+        result["error"] = "not an anisnatch /video/ URL"; return result
+
+    path = iframe_url[len(IFRAME_BASE):]
+    ep_m = re.search(r"/(\d+-\d+)$", path)
+    if ep_m:
+        result["ep_suffix"] = ep_m.group(1)
+
+    first_slash = path.find("/")
+    if first_slash == -1:
+        result["error"] = "unexpected URL structure"; return result
+
+    server_type = path[:first_slash]
+    rest        = path[first_slash + 1:]
+    ep_sfx      = result["ep_suffix"]
+    token       = rest[:-(len(ep_sfx) + 1)] if ep_sfx and rest.endswith("/" + ep_sfx) else rest
+
+    result["server_type"] = server_type
+    result["token"]       = token
+
+    if   server_type == "def":        result["extra"] = _decode_allanime_def(token)
+    elif server_type == "vibeplayer": result["extra"] = {"player_url": _decode_vibeplayer_b64(token)}
+    elif server_type == "yt-mp4":     result["extra"] = {"yt_key": token}
+    elif server_type == "megaplay":   result["extra"] = {"megaplay_id": token.removesuffix("-dub").removesuffix("-sub")}
+    elif server_type == "vidwish":    result["extra"] = {"vidwish_id":  token.removesuffix("-dub").removesuffix("-sub")}
+    elif server_type == "ok":         result["extra"] = {"ok_video_id": token, "ok_embed_url": f"https://ok.ru/videoembed/{token}"}
+    elif server_type == "mp4":        result["extra"] = {"mp4_slug": token}
+    elif server_type == "swift":      result["extra"] = {"swift_token": token}
+    elif server_type == "anicdn":     result["extra"] = {"anicdn_hash": token}
+    else:                             result["extra"] = {"unknown_token": token}
+
+    if "error" in result.get("extra", {}):
+        result["error"] = result["extra"]["error"]
+    return result
 
 
-# ── Episode parser ────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# SECTION 2 — FLAT ENTRY BUILDER
+# ══════════════════════════════════════════════════════════════════
 
-def parse_eps(raw: str):
-    raw = raw.strip()
-    if not raw:
-        return None, None, "unknown"
-    if '/' in raw:
-        aired_str, total_str = raw.split('/', 1)
-        aired = int(aired_str) if aired_str.isdigit() else None
-        total = int(total_str) if total_str.isdigit() else None
-        if total is None:
-            return None, aired, "ongoing"
-        if aired == total:
-            return total, total, "complete"
-        return total, aired, "aired"
-    ep = int(raw) if raw.isdigit() else None
-    if ep:
-        return ep, ep, "complete"
-    return None, None, "unknown"
+_SERVER_ORDER = ["def","vibeplayer","yt-mp4","megaplay","vidwish","ok","mp4","swift","anicdn"]
 
 
-# ── Record builder ────────────────────────────────────────────────────────────
+def build_flat_entry(serial, title, watch_url, anime_id, episode, servers, stream_type="dub"):
+    decoded_map: dict[str, list] = {}
+    for s in servers:
+        dec   = decode_iframe_url(s["iframe_url"])
+        stype = dec["server_type"] or "unknown"
+        decoded_map.setdefault(stype, []).append(dec)
 
-def build_record(serial: int, anime_id: str, title: str,
-                 total, aired, status: str,
-                 anime_type: str = "unknown", year: int | None = None) -> dict:
-    base = f"https://anisnatch.top/watch/{anime_id}"
+        active_tag = " ← active" if s["active"] else ""
+        print(f"  [DECODE] {s['label']}{active_tag}  type={stype}")
+        if stype == "def":
+            ex = dec.get("extra", {})
+            print(f"    allanime_480:  {ex.get('m3u8_480','')}")
+            print(f"    allanime_720:  {ex.get('m3u8_720','')}")
+            print(f"    allanime_1080: {ex.get('m3u8_1080','')}")
+        elif stype == "vibeplayer": print(f"    player_url: {dec['extra'].get('player_url','')}")
+        elif stype == "ok":         print(f"    ok_embed:   {dec['extra'].get('ok_embed_url','')}")
+        else:                       print(f"    iframe_url: {dec['iframe_url']}")
 
-    def ep_url(n):
-        if not n or n == 1:
-            return f"{base}?ep=1"
-        return f"{base}?ep=1 to {n}"
-
-    if status == "complete":
-        return {
-            "serial_no":  serial,
-            "anime_id":   anime_id,
-            "anime_name": title,
-            "type":       anime_type,
-            "year":       year,
-            "total_ep":   total,
-            "status":     "complete",
-            "url":        ep_url(total),
-        }
-    if status == "aired":
-        return {
-            "serial_no":      serial,
-            "anime_id":       anime_id,
-            "anime_name":     title,
-            "type":           anime_type,
-            "year":           year,
-            "total_ep":       total,
-            "total_ep_aired": aired,
-            "status":         "aired",
-            "aired_url":      ep_url(aired),
-            "url":            ep_url(total),
-        }
-    if status == "ongoing":
-        return {
-            "serial_no":      serial,
-            "anime_id":       anime_id,
-            "anime_name":     title,
-            "type":           anime_type,
-            "year":           year,
-            "total_ep_aired": aired,
-            "status":         "ongoing",
-            "aired_url":      ep_url(aired),
-        }
-    return {
-        "serial_no":  serial,
-        "anime_id":   anime_id,
-        "anime_name": title,
-        "type":       anime_type,
-        "year":       year,
-        "total_ep":   "unknown",
-        "status":     "unknown",
-        "url":        f"{base}?ep=1",
+    entry: dict = {
+        "serial": serial,
+        "title":  title,
+        "url":    watch_url,
+        "mal_id_with_ep_and_stream_type": f"{anime_id}/{episode}=={stream_type}",
     }
 
+    for stype in _SERVER_ORDER:
+        decs = decoded_map.get(stype, [])
+        if not decs: continue
+        dec  = decs[0]
+        ex   = dec.get("extra", {})
+        iurl = dec["iframe_url"]
 
-# ── Page parser ───────────────────────────────────────────────────────────────
+        if   stype == "def":        entry.update({"allanime_iframe": iurl, "allanime_480": ex.get("m3u8_480",""), "allanime_720": ex.get("m3u8_720",""), "allanime_1080": ex.get("m3u8_1080","")})
+        elif stype == "vibeplayer": entry.update({"anivibe_iframe": iurl, "anivibe": ex.get("player_url","")})
+        elif stype == "yt-mp4":     entry.update({"aniyt_iframe": iurl,    "aniyt": iurl})
+        elif stype == "megaplay":   entry.update({"megaplay_iframe": iurl,  "megaplay": iurl})
+        elif stype == "vidwish":    entry.update({"vidwish_iframe": iurl,   "vidwish": iurl})
+        elif stype == "mp4":        entry.update({"mp4_iframe": iurl,       "mp4": iurl})
+        elif stype == "swift":      entry.update({"swift_iframe": iurl,     "swift": iurl})
+        elif stype == "anicdn":     entry.update({"anicdn_iframe": iurl,    "anicdn": iurl})
+        elif stype == "ok":         entry.update({"okcdn_iframe": iurl,     "okcdn": ex.get("ok_embed_url","")})
+        else:                       entry.update({f"{stype}_iframe": iurl,  stype: iurl})
 
-def parse_updated_page(html: str):
-    blocks = re.split(r'(?=<li\s+ani-id=)', html)
-    seen: set[str] = set()
-    results = []
-    for block in blocks:
-        am = ANIME_PATTERN.search(block)
-        if not am:
-            continue
-        anime_id = am.group(1)
-        if anime_id in seen:
-            continue
-        seen.add(anime_id)
-        title = am.group(2)
-        em = EPS_PATTERN.search(block)
-        total, aired, status = parse_eps(em.group(1) if em else "")
-
-        # Extract type: first fdi-item that is NOT a 4-digit year
-        anime_type = "unknown"
-        for tm in TYPE_PATTERN.finditer(block):
-            val = tm.group(1).strip()
-            if val and not re.fullmatch(r'\d{4}', val):
-                anime_type = val
-                break
-
-        # Extract year: first fdi-item that IS a 4-digit year
-        ym = YEAR_PATTERN.search(block)
-        year = int(ym.group(1)) if ym else None
-
-        results.append((anime_id, title, total, aired, status, anime_type, year))
-    return results
+    return entry
 
 
-# ── Browser helper ────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# SECTION 3 — SPLIT-FILE MANAGEMENT  (.json only)
+# ══════════════════════════════════════════════════════════════════
 
-async def safe_goto(page, url: str, selector: str | None = None):
-    for attempt in range(1, 4):
+def _all_json_files():
+    base     = glob.glob(OUTPUT_BASE + OUTPUT_EXT_JSON)
+    numbered = sorted(
+        glob.glob(f"{OUTPUT_BASE}_*{OUTPUT_EXT_JSON}"),
+        key=lambda f: int(re.search(r'_(\d+)\.json$', f).group(1))
+        if re.search(r'_(\d+)\.json$', f) else 0,
+    )
+    return base + numbered
+
+def all_output_files():
+    """Return all local output json files, for reporting."""
+    return _all_json_files()
+
+
+def load_all_streams():
+    merged = []
+    for f in _all_json_files():
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT)
-            if selector:
-                try:
-                    await page.wait_for_selector(selector, timeout=SELECTOR_TIMEOUT)
-                except Exception:
-                    pass
-            return await page.content()
-        except Exception as exc:
-            print(f"    ⚠ attempt {attempt}/3 failed for {url}: {type(exc).__name__}")
-            if attempt < 3:
-                await asyncio.sleep(6 * attempt)
-    return ""
+            with open(f, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+                if isinstance(data, list):
+                    merged.extend(data)
+        except Exception:
+            pass
+    return merged
 
 
-async def scrape_pages(page, start: int, end: int) -> dict[str, tuple]:
-    collected: dict[str, tuple] = {}
-    for page_num in range(start, end + 1):
-        html    = await safe_goto(page, f"{BASE_URL}{page_num}", "li[ani-id]")
-        entries = parse_updated_page(html)
-        new_count = 0
-        for anime_id, title, total, aired, status, anime_type, year in entries:
-            if anime_id not in collected:
-                collected[anime_id] = (title, total, aired, status, anime_type, year)
-                new_count += 1
+def _current_write_target_json():
+    files = _all_json_files()
+    if not files:
+        return OUTPUT_BASE + OUTPUT_EXT_JSON
+    last = files[-1]
+    if os.path.getsize(last) >= MAX_FILE_BYTES:
+        m   = re.search(r'_(\d+)\.json$', last)
+        idx = int(m.group(1)) + 1 if m else 2
+        return f"{OUTPUT_BASE}_{idx}{OUTPUT_EXT_JSON}"
+    return last
+
+
+
+
+
+def save_entry_to_file(url: str, entry: dict) -> str:
+    target = _current_write_target_json()
+    bucket: list = []
+    if os.path.isfile(target):
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                bucket = json.load(f)
+            if not isinstance(bucket, list):
+                bucket = []
+        except Exception:
+            bucket = []
+
+    bucket.append(entry)
+    serialised = json.dumps(bucket, indent=2, ensure_ascii=False)
+
+    # If adding this entry would overflow, spill into a new split file
+    if len(serialised.encode("utf-8")) > MAX_FILE_BYTES and len(bucket) > 1:
+        bucket.pop()
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump(bucket, f, indent=2, ensure_ascii=False)
+
+        m      = re.search(r'_(\d+)\.json$', target)
+        idx    = int(m.group(1)) + 1 if m else 2
+        target = f"{OUTPUT_BASE}_{idx}{OUTPUT_EXT_JSON}"
+        bucket = [entry]
+        serialised = json.dumps(bucket, indent=2, ensure_ascii=False)
+
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(serialised)
+
+    return target
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 4 — PROCESSED / ERROR / FAILED-URL LOGS
+# ══════════════════════════════════════════════════════════════════
+
+def load_processed_urls() -> set:
+    if not os.path.isfile(PROCESSED_FILE):
+        return set()
+    with open(PROCESSED_FILE, "r", encoding="utf-8") as f:
+        return {line.strip() for line in f if line.strip()}
+
+def mark_processed(url: str):
+    with open(PROCESSED_FILE, "a", encoding="utf-8") as f:
+        f.write(url + "\n")
+
+def mark_error(url: str, reason: str):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    with open(ERROR_FILE, "a", encoding="utf-8") as f:
+        f.write(f"[{ts}]  {url}  |  {reason}\n")
+
+def mark_failed_url(url: str):
+    with open(FAILED_URL_FILE, "a", encoding="utf-8") as f:
+        f.write(url + "\n")
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 5 — INPUT URL LIST  (txt file + remote JSON catalogue)
+# ══════════════════════════════════════════════════════════════════
+
+_RANGE_RE = re.compile(r'^(https?://[^\s]+\?ep=)(\d+)\s+to\s+(\d+)\s*$', re.IGNORECASE)
+
+
+def _expand_line(raw_line: str) -> list[str]:
+    """Expand  '…?ep=1 to 12'  into 12 individual episode URLs."""
+    m = _RANGE_RE.match(raw_line.strip())
+    if not m:
+        return [raw_line.strip()]
+    base_prefix = m.group(1)
+    start, end  = int(m.group(2)), int(m.group(3))
+    if start > end:
+        print(f"  [WARN] Range {start} > {end}, expanding in reverse")
+        return [f"{base_prefix}{ep}" for ep in range(start, end - 1, -1)]
+    return [f"{base_prefix}{ep}" for ep in range(start, end + 1)]
+
+
+def _urls_from_txt() -> list[str]:
+    """Load + range-expand URLs from the local txt input file."""
+    if not os.path.isfile(INPUT_FILE):
+        print(f"[INFO] {INPUT_FILE} not found — skipping txt source")
+        return []
+    raw_lines = [l.strip() for l in open(INPUT_FILE, encoding="utf-8") if l.strip()]
+    print(f"[INFO] {len(raw_lines)} raw line(s) read from {INPUT_FILE}")
+    expanded, range_count = [], 0
+    for raw in raw_lines:
+        chunk = _expand_line(raw)
+        if len(chunk) > 1:
+            range_count += 1
+            print(f"  [RANGE] Expanded → {len(chunk)} URL(s)  ({chunk[0]}  …  {chunk[-1]})")
+        expanded.extend(chunk)
+    if range_count:
+        print(f"[INFO] {range_count} range(s) expanded → {len(expanded)} total URL(s) from txt")
+    return expanded
+
+
+def _urls_from_json_catalogue() -> list[str]:
+    """
+    Fetch the remote JSON catalogue and extract episode URLs according to status:
+      "aired"    → entry["aired_url"]   (range-expanded)
+      "ongoing"  → entry["aired_url"]   (range-expanded)
+      "complete" → entry["url"]         (range-expanded)
+    Entries missing the expected field are warned and skipped.
+    """
+    if not JSON_CATALOGUE_URL:
+        return []
+
+    print(f"[INFO] Fetching JSON catalogue: {JSON_CATALOGUE_URL}")
+    try:
+        req  = Request(JSON_CATALOGUE_URL, headers={"User-Agent": "anisnatch-extractor/1.0"})
+        with urlopen(req, timeout=30) as resp:
+            raw  = resp.read().decode("utf-8")
+            data = json.loads(raw)
+    except URLError as e:
+        print(f"[WARN] Could not fetch JSON catalogue: {e}"); return []
+    except json.JSONDecodeError as e:
+        print(f"[WARN] JSON catalogue is not valid JSON: {e}"); return []
+
+    if not isinstance(data, list):
+        print("[WARN] JSON catalogue root is not a list — skipping"); return []
+
+    print(f"[INFO] JSON catalogue: {len(data)} entries")
+
+    expanded = []
+    skipped  = 0
+    for entry in data:
+        if not isinstance(entry, dict):
+            skipped += 1; continue
+
+        status = (entry.get("status") or "").strip().lower()
+
+        if status in ("aired", "ongoing"):
+            raw_url = entry.get("aired_url", "")
+        elif status == "complete":
+            raw_url = entry.get("url", "")
+        else:
+            # Unknown / missing status — try aired_url first, then url
+            raw_url = entry.get("aired_url") or entry.get("url", "")
+            if raw_url:
+                print(f"  [WARN] Unknown status '{status}' for anime_id="
+                      f"{entry.get('anime_id','?')} — using '{raw_url}'")
             else:
-                _, _, old_aired, _, old_type, old_year = collected[anime_id]
-                if aired is not None and (old_aired is None or aired > old_aired):
-                    collected[anime_id] = (title, total, aired, status, anime_type, year)
-        print(f"  [Page {page_num:>3}/{end}]  {len(entries):>2} entries  "
-              f"+{new_count} new  |  total scraped: {len(collected):>4}")
-        await asyncio.sleep(PAGE_DELAY)
-    return collected
+                print(f"  [WARN] No usable URL for anime_id={entry.get('anime_id','?')} "
+                      f"(status='{status}') — skipping")
+                skipped += 1; continue
+
+        if not raw_url:
+            name = entry.get("anime_name", entry.get("anime_id", "?"))
+            print(f"  [WARN] '{status}' entry has no URL for '{name}' — skipping")
+            skipped += 1; continue
+
+        # Range-expand the URL (handles "?ep=1 to 12" syntax)
+        chunk = _expand_line(raw_url.strip())
+        if len(chunk) > 1:
+            print(f"  [RANGE JSON] {entry.get('anime_name','?')} → {len(chunk)} ep(s)"
+                  f"  ({chunk[0]}  …  {chunk[-1]})")
+        expanded.extend(chunk)
+
+    print(f"[INFO] JSON catalogue produced {len(expanded)} URL(s) "
+          f"({skipped} entries skipped)")
+    return expanded
 
 
-# ── Modes ─────────────────────────────────────────────────────────────────────
+def load_input_urls() -> list:
+    """
+    Merge URLs from:
+      1. inputed_urls_list.txt  (local, range-expanded)
+      2. Remote JSON catalogue  (fetched, range-expanded, status-routed)
+    Deduplicate while preserving order (txt URLs come first).
+    """
+    txt_urls  = _urls_from_txt()
+    json_urls = _urls_from_json_catalogue()
 
-async def mode_full_range(browser_page, start: int, end: int):
-    print(f"\n  MODE: full_range  pages {start}–{end}")
-    scraped  = await scrape_pages(browser_page, start, end)
-    existing = load_existing()
+    combined = txt_urls + json_urls
+    seen, unique = set(), []
+    for u in combined:
+        if u not in seen:
+            seen.add(u); unique.append(u)
 
-    for anime_id, (title, total, aired, status, anime_type, year) in scraped.items():
-        serial = existing.get(anime_id, {}).get("serial_no", 0)
-        existing[anime_id] = build_record(serial, anime_id, title, total, aired, status, anime_type, year)
+    dupes = len(combined) - len(unique)
+    if dupes:
+        print(f"[INFO] {dupes} duplicate(s) removed across both sources → {len(unique)} unique")
+    else:
+        print(f"[INFO] {len(unique)} unique URL(s) across both sources")
 
-    records = list(existing.values())
-    save_all_records(records)
-    print_summary(records, f"full_range pages {start}–{end}")
+    if not unique:
+        print(f"[ERROR] No input URLs found from any source.")
+        sys.exit(1)
 
-
-async def mode_daily_update(browser_page):
-    print(f"\n  MODE: daily_update  (pages 1–4 + refresh ongoing/aired)")
-    fresh    = await scrape_pages(browser_page, 1, 4)
-    existing = load_existing()
-
-    updated_count = 0
-    new_count     = 0
-
-    for anime_id, (title, total, aired, status, anime_type, year) in fresh.items():
-        if anime_id in existing:
-            old       = existing[anime_id]
-            old_aired = old.get("total_ep_aired") or old.get("total_ep")
-            new_aired = aired or total
-            if new_aired and (old_aired is None or new_aired > old_aired):
-                existing[anime_id] = build_record(
-                    old["serial_no"], anime_id, title, total, aired, status, anime_type, year
-                )
-                updated_count += 1
-        else:
-            existing[anime_id] = build_record(0, anime_id, title, total, aired, status, anime_type, year)
-            new_count += 1
-
-    print(f"\n  Daily update summary:")
-    print(f"    New anime found  : {new_count}")
-    print(f"    Records updated  : {updated_count}")
-
-    records = list(existing.values())
-    save_all_records(records)
-    print_summary(records, "daily_update")
+    return unique
 
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# SECTION 6 — PLAYWRIGHT HELPERS
+# ══════════════════════════════════════════════════════════════════
 
-def print_summary(records: list, label: str):
-    counts = {"complete": 0, "aired": 0, "ongoing": 0, "unknown": 0}
-    for r in records:
-        counts[r.get("status", "unknown")] += 1
-    print(f"\n{'═'*60}")
-    print(f"  ✅  {label} done")
-    print(f"  Total records      : {len(records)}")
-    print(f"  Complete           : {counts['complete']}")
-    print(f"  Partially aired    : {counts['aired']}")
-    print(f"  Ongoing (no total) : {counts['ongoing']}")
-    print(f"  Unknown            : {counts['unknown']}")
-    print(f"{'═'*60}\n")
+def _select_stream_type(page, stream_type: str) -> bool:
+    try:
+        page.wait_for_selector("#server-option", timeout=15_000)
+    except Exception:
+        print(f"  [{stream_type.upper()}] #server-option not found"); return False
+
+    btn = page.query_selector("#serverType")
+    if btn and (btn.get_attribute("data-value") or "").lower() == stream_type:
+        print(f"  [{stream_type.upper()}] Already active"); return True
+
+    try:
+        overlay = page.query_selector("div.partPlayer")
+        if overlay:
+            page.evaluate("() => { const e=document.querySelector('div.partPlayer'); if(e) e.style.pointerEvents='none'; }")
+    except Exception:
+        pass
+
+    try:
+        page.evaluate("() => { const b=document.querySelector('#serverType'); if(b) b.click(); }")
+        time.sleep(0.5)
+    except Exception:
+        pass
+
+    item = page.query_selector(f'#serverTypeMenu .dropdown-item[data-type="{stream_type}"]')
+    if not item:
+        print(f"  [{stream_type.upper()}] Not found in #serverTypeMenu"); return False
+
+    try:
+        print(f"  [{stream_type.upper()}] Clicking …")
+        clicked = page.evaluate(f"""
+            () => {{
+                const i = document.querySelector('#serverTypeMenu .dropdown-item[data-type="{stream_type}"]');
+                if (!i) return false;
+                i.dispatchEvent(new MouseEvent('click', {{bubbles:true, cancelable:true}}));
+                return true;
+            }}
+        """)
+        if not clicked: return False
+        time.sleep(2.5)
+    except Exception as e:
+        try:
+            item.click(force=True); time.sleep(2.5)
+        except Exception as e2:
+            print(f"  [{stream_type.upper()}] Click failed: {e2}"); return False
+
+    btn = page.query_selector("#serverType")
+    if btn and (btn.get_attribute("data-value") or "").lower() == stream_type:
+        print(f"  [{stream_type.upper()}] Confirmed active"); return True
+    if page.query_selector(f'#serverTypeMenu .dropdown-item.active[data-type="{stream_type}"]'):
+        print(f"  [{stream_type.upper()}] Confirmed active via .active"); return True
+
+    print(f"  [{stream_type.upper()}] Could not confirm selection"); return False
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+def ensure_best_stream_type(page) -> str | None:
+    """Try DUB → fallback SUB → None."""
+    if _select_stream_type(page, "dub"):
+        return "dub"
+    print("  [FALLBACK] DUB unavailable — trying SUB …")
+    if _select_stream_type(page, "sub"):
+        return "sub"
+    print("  [SKIP] Neither DUB nor SUB available")
+    return None
 
-async def main():
-    mode       = os.environ.get("MODE",       "daily_update")
-    page_start = int(os.environ.get("PAGE_START", "1"))
-    page_end   = int(os.environ.get("PAGE_END",   "4"))
 
-    print(f"\n{'═'*60}")
-    print(f"  AniSnatch Scraper — GitHub Actions")
-    print(f"  Mode : {mode}")
-    if mode == "full_range":
-        print(f"  Pages: {page_start} → {page_end}")
-    print(f"{'═'*60}")
+def extract_servers_from_dom(page) -> list:
+    servers = []
+    try:
+        for item in page.query_selector_all("#streamTypeMenu .dropdown-item"):
+            source = item.get_attribute("data-source") or ""
+            if not source: continue
+            server   = item.get_attribute("data-server") or ""
+            label_el = item.query_selector(".item-text.text-title, .item-text")
+            label    = label_el.inner_text().strip() if label_el else server
+            info_el  = item.query_selector(".item-info")
+            info     = info_el.inner_text().strip() if info_el else ""
+            servers.append({
+                "server":     server,
+                "source":     source,
+                "label":      label,
+                "info":       info,
+                "active":     "active" in (item.get_attribute("class") or ""),
+                "iframe_url": urljoin(BASE_URL + "/video/", source),
+            })
+    except Exception as e:
+        print(f"  [DOM] Error reading #streamTypeMenu: {e}")
+    return servers
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 7 — SINGLE URL PROCESSOR
+# ══════════════════════════════════════════════════════════════════
+
+def extract_one(watch_url: str, serial: int) -> dict | None:
+    from playwright.sync_api import sync_playwright
+
+    anime_id_m = re.search(r"/watch/(\d+)", watch_url)
+    episode_m  = re.search(r"ep=(\d+)",     watch_url)
+    anime_id   = anime_id_m.group(1) if anime_id_m else "?"
+    episode    = episode_m.group(1)  if episode_m  else "?"
+    print(f"\n→ [#{serial}] Anime {anime_id}  Ep {episode}  |  {watch_url}")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
             headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-            ],
+            args=["--no-sandbox","--disable-blink-features=AutomationControlled","--disable-dev-shm-usage"],
         )
-        context = await browser.new_context(
-            user_agent=USER_AGENT,
-            viewport={"width": 1280, "height": 900},
-            extra_http_headers={
-                "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
-                "accept-language": "en-US,en;q=0.9",
-            },
+        ctx = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/150.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1920, "height": 1080},
         )
-        await context.add_cookies([{
-            "name":     "cf_clearance",
-            "value":    CF_CLEARANCE,
-            "domain":   "anisnatch.top",
-            "path":     "/",
-            "httpOnly": False,
-            "secure":   True,
-            "sameSite": "None",
-        }])
+        page = ctx.new_page()
 
-        page = await context.new_page()
-        await page.route("**/*", lambda route: route.abort()
-            if route.request.resource_type in ("image", "media", "font", "stylesheet")
-            else route.continue_()
-        )
+        try:
+            page.goto(watch_url, wait_until="domcontentloaded", timeout=60_000)
+            time.sleep(2)
+        except Exception as e:
+            browser.close()
+            reason = f"Navigation failed: {e}"
+            print(f"  [ERROR] {reason}")
+            mark_error(watch_url, reason); mark_failed_url(watch_url)
+            return None
 
-        if mode == "full_range":
-            await mode_full_range(page, page_start, page_end)
+        stream_type = ensure_best_stream_type(page)
+        if not stream_type:
+            browser.close()
+            reason = "No DUB or SUB available"
+            print(f"  [SKIP] {reason}")
+            mark_error(watch_url, reason); mark_failed_url(watch_url)
+            return None
+
+        print(f"  [STREAM] Using {stream_type.upper()}")
+
+        servers = extract_servers_from_dom(page)
+        if not servers:
+            browser.close()
+            reason = f"No servers found after {stream_type.upper()} selection"
+            print(f"  [ERROR] {reason}")
+            mark_error(watch_url, reason); mark_failed_url(watch_url)
+            return None
+
+        print(f"  [DOM] Found {len(servers)} {stream_type.upper()} server(s):")
+        for s in servers:
+            atag = " ← active" if s["active"] else ""
+            itag = f" [{s['info']}]" if s["info"] else ""
+            print(f"    {s['label']}{itag}  server={s['server']}{atag}")
+            print(f"      iframe_url: {s['iframe_url']}")
+
+        page_title = page.title()
+        browser.close()
+
+    title = page_title.strip() if page_title and page_title.strip() else f"Anime {anime_id} – Episode {episode}"
+    entry = build_flat_entry(serial, title, watch_url, anime_id, episode, servers, stream_type)
+
+    stream_keys = [k for k in entry if k not in ("serial","title","url","mal_id_with_ep_and_stream_type")]
+    print(f"  ✓ serial={serial}  {len(servers)} server(s)  {len(stream_keys)} key(s)")
+    for k in stream_keys:
+        print(f"    {k}: {entry[k]}")
+
+    return entry
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 8 — CLI & MAIN
+# ══════════════════════════════════════════════════════════════════
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="AniSnatch DUB/SUB stream extractor")
+    parser.add_argument(
+        "--limit", type=str, default="100",
+        help="URLs to process this run: 2|20|50|100|250|500|1000|5000|full  (default: 100)",
+    )
+    return parser.parse_args()
+
+
+def resolve_limit(raw: str) -> int | None:
+    raw = raw.strip().lower()
+    if raw == "full": return None
+    try:    return int(raw)
+    except: print(f"[WARN] Unrecognised --limit '{raw}', using 100"); return 100
+
+
+def main():
+    args  = parse_args()
+    limit = resolve_limit(args.limit)
+    limit_label = "full" if limit is None else str(limit)
+    print(f"[INFO] Batch limit: {limit_label}\n")
+
+    input_urls  = load_input_urls()
+    processed   = load_processed_urls()
+    print(f"[INFO] {len(processed)} already processed — skipping")
+
+    all_streams      = load_all_streams()
+    existing_serials = [v.get("serial", 0) for v in all_streams if isinstance(v, dict)]
+    next_serial      = max(existing_serials, default=0) + 1
+
+    pending = [u for u in input_urls if u not in processed]
+    print(f"[INFO] {len(pending)} pending")
+
+    batch = pending[:limit] if limit is not None else pending
+    print(f"[INFO] Processing {len(batch)} URL(s) this run\n")
+
+    if not batch:
+        print("[INFO] Nothing to do — all URLs already processed.")
+        sys.exit(0)
+
+    ok = 0
+    errors = 0
+
+    for url in batch:
+        existing = next(
+            (e for e in all_streams if isinstance(e, dict) and e.get("url") == url), None
+        )
+        serial = existing["serial"] if existing and "serial" in existing else next_serial
+        if serial == next_serial:
+            next_serial += 1
+
+        entry = extract_one(url, serial)
+        if entry:
+            target = save_entry_to_file(url, entry)
+            mark_processed(url)
+            ok += 1
+            print(f"  → Saved to {target}")
         else:
-            await mode_daily_update(page)
+            errors += 1
 
-        await browser.close()
+    print(f"\n{'='*55}")
+    print(f"Batch limit   : {limit_label}")
+    print(f"Processed     : {ok} succeeded  |  {errors} failed")
+    print(f"Output files  : {all_output_files()}")
+    print(f"Processed log : {PROCESSED_FILE}")
+    print(f"Error log     : {ERROR_FILE}")
+    print(f"Failed URLs   : {FAILED_URL_FILE}")
+    sys.exit(0)   # always 0 — partial success is not a hard CI failure
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
