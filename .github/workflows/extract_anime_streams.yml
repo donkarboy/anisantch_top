@@ -18,8 +18,8 @@ on:
           - "1000"
           - "5000"
           - "full"
-  schedule:
-    - cron: "*/90 * * * *"   # runs every 30 minutes; uses the default batch limit (100)
+ # schedule:
+  #   - cron: "*/90 * * * *"   # runs every 30 minutes; uses the default batch limit (100)
 
 jobs:
   extract:
