@@ -6,7 +6,7 @@ MODE=daily_update                            →  scrape pages 1–4, refresh on
 
 Output files:
   anime-page-only-url-scraper.json        (first chunk, always exists)
-  anime-page-only-url-scraper-part2.json  (if total > 3 MB)
+  anime-page-only-url-scraper-part2.json  (if total > 1 MB)
   anime-page-only-url-scraper-part3.json  ...and so on
 
 Each file is kept under MAX_FILE_BYTES. Records are split across files in
@@ -22,7 +22,7 @@ from playwright.async_api import async_playwright
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_URL      = "https://anisnatch.top/updated?page="
 OUTPUT_BASE   = "anime-page-only-url-scraper"   # no .json — added below
-MAX_FILE_BYTES = 3 * 1024 * 1024                 # 3 MB per file
+MAX_FILE_BYTES = 1 * 1024 * 1024                 # 1 MB per file
 
 # ⚠️  Replace this value whenever the cookie expires (every 1-2 days).
 CF_CLEARANCE = (
@@ -45,12 +45,10 @@ GOTO_TIMEOUT     = 45000  # ms
 SELECTOR_TIMEOUT = 15000  # ms
 # ─────────────────────────────────────────────────────────────────────────────
 
-ANIME_PATTERN = re.compile(r'data-href="anime/(\d+)"\s+title="([^"]+)"')
+ANIME_PATTERN = re.compile(r'<li\s+ani-id="(\d+)"[^>]*>.*?data-href="anime/\1"\s+title="([^"]+)"', re.DOTALL)
 EPS_PATTERN   = re.compile(r'class="tick-item tick-eps">([^<]+)</div>')
-# AniSnatch/AniWatch: <div class="fd-infor"><span class="fdi-item">TV</span> ...
-# type is the first fdi-item span; year is an fdi-item containing a 4-digit number
-TYPE_PATTERN  = re.compile(r'class="fdi-item">([^<]+)</span>')
-YEAR_PATTERN  = re.compile(r'class="fdi-item">\s*(\d{4})\s*</span>')
+TYPE_PATTERN  = re.compile(r'class="usercontrol">([^<]+)</div>')
+YEAR_PATTERN  = re.compile(r'fa-calendar-days"></i>\s*(\d{4})')
 
 
 # ── File name helpers ─────────────────────────────────────────────────────────
@@ -244,19 +242,10 @@ def parse_updated_page(html: str):
         title = am.group(2)
         em = EPS_PATTERN.search(block)
         total, aired, status = parse_eps(em.group(1) if em else "")
-
-        # Extract type: first fdi-item that is NOT a 4-digit year
-        anime_type = "unknown"
-        for tm in TYPE_PATTERN.finditer(block):
-            val = tm.group(1).strip()
-            if val and not re.fullmatch(r'\d{4}', val):
-                anime_type = val
-                break
-
-        # Extract year: first fdi-item that IS a 4-digit year
+        tm = TYPE_PATTERN.search(block)
+        anime_type = tm.group(1).strip() if tm else "unknown"
         ym = YEAR_PATTERN.search(block)
         year = int(ym.group(1)) if ym else None
-
         results.append((anime_id, title, total, aired, status, anime_type, year))
     return results
 
@@ -291,7 +280,7 @@ async def scrape_pages(page, start: int, end: int) -> dict[str, tuple]:
                 collected[anime_id] = (title, total, aired, status, anime_type, year)
                 new_count += 1
             else:
-                _, _, old_aired, _, old_type, old_year = collected[anime_id]
+                _, _, old_aired, _, _, _ = collected[anime_id]
                 if aired is not None and (old_aired is None or aired > old_aired):
                     collected[anime_id] = (title, total, aired, status, anime_type, year)
         print(f"  [Page {page_num:>3}/{end}]  {len(entries):>2} entries  "
@@ -324,18 +313,18 @@ async def mode_daily_update(browser_page):
     updated_count = 0
     new_count     = 0
 
-    for anime_id, (title, total, aired, status, anime_type, year) in fresh.items():
+    for anime_id, (title, total, aired, status) in fresh.items():
         if anime_id in existing:
             old       = existing[anime_id]
             old_aired = old.get("total_ep_aired") or old.get("total_ep")
             new_aired = aired or total
             if new_aired and (old_aired is None or new_aired > old_aired):
                 existing[anime_id] = build_record(
-                    old["serial_no"], anime_id, title, total, aired, status, anime_type, year
+                    old["serial_no"], anime_id, title, total, aired, status
                 )
                 updated_count += 1
         else:
-            existing[anime_id] = build_record(0, anime_id, title, total, aired, status, anime_type, year)
+            existing[anime_id] = build_record(0, anime_id, title, total, aired, status)
             new_count += 1
 
     print(f"\n  Daily update summary:")
